@@ -67,6 +67,7 @@ const existsOverwriteBtn = document.getElementById("existsOverwriteBtn");
 let queue = [];
 let queueIndex = -1;
 let playHistory = [];
+let nowPlayingTrack = null;
 let isPlaying = false;
 let isShuffled = false;
 let repeatMode = 0; // 0=off, 1=repeat-one, 2=repeat-all
@@ -153,10 +154,21 @@ volumeSlider.addEventListener("input", (e) => {
   audio.volume = e.target.value / 100;
 });
 audio.addEventListener("timeupdate", updateProgress);
-audio.addEventListener("loadedmetadata", updateTotalTime);
+audio.addEventListener("loadedmetadata", () => {
+  updateTotalTime();
+  if (nowPlayingTrack) {
+    reportNowPlaying(nowPlayingTrack, !audio.paused);
+  }
+});
 audio.addEventListener("ended", handleEnd);
-audio.addEventListener("play", () => updatePlayBtn(true));
-audio.addEventListener("pause", () => updatePlayBtn(false));
+audio.addEventListener("play", () => {
+  updatePlayBtn(true);
+  reportNowPlaying(queue[queueIndex], true);
+});
+audio.addEventListener("pause", () => {
+  updatePlayBtn(false);
+  reportNowPlaying(queue[queueIndex], false);
+});
 audio.addEventListener("error", () => {
   console.error("Playback error, trying next");
   nextTrack();
@@ -314,8 +326,26 @@ function updatePlayBtn(playing) {
   document.body.classList.toggle("playing", playing);
 }
 
+function reportNowPlaying(track, playing) {
+  if (!track) return;
+  let dur = track.duration || 0;
+  if (isFinite(audio.duration) && audio.duration > 0) {
+    dur = Math.round(audio.duration);
+  }
+  fetch("/api/now-playing", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: track.title || "Unknown",
+      duration: dur,
+      playing: playing,
+    }),
+  }).catch(() => {});
+}
+
 function loadAndPlay(track) {
   if (!track) return;
+  nowPlayingTrack = track;
   currentTrackType = track.source || "yt";
   setDisplayInfo(track);
   updateActiveCard(track);
@@ -324,6 +354,8 @@ function loadAndPlay(track) {
   updateQueueBar();
   checkLiked(track.video_id);
   checkDownload(track.video_id);
+  reportNowPlaying(track, true);
+  setTimeout(() => reportNowPlaying(nowPlayingTrack, !audio.paused), 800);
 
   if (currentTrackType === "local") {
     let encodedPath = encodeURI(track.path);
@@ -571,7 +603,7 @@ function searchYouTube(query) {
       resultsContainer.innerHTML = "";
       res.forEach((item) => {
         const card = createSongCard(item, "yt");
-        card.addEventListener("click", () => playTrack(item, res));
+        card.addEventListener("click", () => playTrack(item));
         const addBtn = card.querySelector(".song-actions button");
         addBtn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -600,7 +632,7 @@ function searchLocal(query) {
           { ...item, thumbnail: "", channel: "Local Music", duration: 0 },
           "local",
         );
-        card.addEventListener("click", () => playLocal(item, res));
+        card.addEventListener("click", () => playLocal(item, [item]));
         const addBtn = card.querySelector(".song-actions button");
         addBtn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -1231,7 +1263,7 @@ function loadLiked() {
             duration: 0,
           };
           const card = createSongCard(item, "yt");
-          card.addEventListener("click", () => playTrack(item, entries));
+          card.addEventListener("click", () => playTrack(item));
           const addBtn = card.querySelector(".song-actions button");
           addBtn.addEventListener("click", (e) => {
             e.stopPropagation();

@@ -9,7 +9,7 @@ import time
 
 import vlc
 
-from .. import visualizer
+from .. import status, visualizer
 from ..imports import config
 
 _truncate_title = config._truncate_title
@@ -178,6 +178,7 @@ def play_file(filepath, title, args=None, flags=None):
             time.sleep(0.1)
         if duration <= 0:
             duration = 0
+        status.update(title, duration)
         dur_min, dur_sec = divmod(int(duration), 60)
         flags_str = _flags_str(args)
         i(f"\nPlaying : {_truncate_title(title)}")

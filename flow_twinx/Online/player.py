@@ -9,7 +9,7 @@ import time
 
 import vlc
 
-from .. import lyrics, visualizer
+from .. import lyrics, status, visualizer
 from ..imports import config
 
 _truncate_title = config._truncate_title
@@ -196,6 +196,7 @@ def play_url(url, title, args=None, duration=0):
             },
         )
 
+        status.update(title, duration)
         dur_min, dur_sec = divmod(int(duration), 60)
         flags = _flags_str(args)
         i(f"\n[⥤ Now : {_truncate_title(title)}]")
@@ -264,6 +265,7 @@ def play_entry(entry, title, args=None, flags=None):
         },
     )
 
+    status.update(title, duration)
     dur_min, dur_sec = divmod(int(duration), 60)
     fstr = _flags_str(args)
     i(f"\n[⥤ Now : {_truncate_title(title)}]")

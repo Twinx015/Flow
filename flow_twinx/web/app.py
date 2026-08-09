@@ -9,6 +9,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 
 from .. import downloads
 from .. import playlist
+from .. import status
 from ..imports import config
 from . import devlog
 
@@ -359,6 +360,17 @@ def api_delete_download():
         devlog.log_success("FETCH", 200, "/api/delete-download", "flow", f"deleted {video_id}")
         return jsonify({"success": True})
     return jsonify({"error": "not downloaded"}), 404
+
+
+@app.route("/api/now-playing", methods=["POST"])
+def api_now_playing():
+    data = request.get_json(force=True)
+    status.update(
+        data.get("title"),
+        data.get("duration", 0),
+        data.get("playing", True),
+    )
+    return jsonify({"success": True})
 
 
 @app.route("/api/playlists")

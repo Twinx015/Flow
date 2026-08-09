@@ -120,6 +120,9 @@ def main():
         help="stop all background processes (VLC + web server)",
     )
     parser.add_argument(
+        "--status", action="store_true", help="show playback and web mode status"
+    )
+    parser.add_argument(
         "command", nargs="?", default=None, help="subcommand (play, search, list, ...)"
     )
     parser.add_argument("--check", action="store_true", help="check all dependencies")
@@ -258,6 +261,12 @@ def main():
             print(f"{P}Flow web server → http://127.0.0.1:{port} (dev){R}")
             _run_web(port)
         return
+
+    if getattr(args, "status", False):
+        from .status import show as show_status
+
+        show_status()
+        sys.exit(0)
 
     shortcuts.load()
 
