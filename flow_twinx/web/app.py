@@ -7,6 +7,8 @@ import pathlib
 import yt_dlp
 from flask import Flask, jsonify, render_template, request, send_file
 
+from .. import downloads
+from .. import playlist
 from ..imports import config
 from . import devlog
 
@@ -107,12 +109,22 @@ def _get_stream_url(entry):
     return entry.get("url")
 
 
+def _full_res_thumbnail(url):
+    if not url or "i.ytimg.com/vi/" not in url:
+        return url or ""
+    try:
+        video_id = url.split("/vi/")[1].split("/")[0]
+        return f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+    except IndexError:
+        return url
+
+
 def _get_thumbnail(entry):
     if entry.get("thumbnail"):
-        return entry["thumbnail"]
+        return _full_res_thumbnail(entry["thumbnail"])
     thumbs = entry.get("thumbnails", [])
     if thumbs:
-        return thumbs[-1].get("url", "")
+        return _full_res_thumbnail(thumbs[-1].get("url", ""))
     return ""
 
 
@@ -305,6 +317,7 @@ def download():
                 ext = fmt
                 stem = pathlib.Path(filename).stem
                 filename = str(pathlib.Path(save_path) / f"{stem}.{ext}")
+            downloads.track(vid, filename, info.get("title", "Unknown"))
             devlog.log_success("FETCH", 200, "/download", "yt_dlp", f"downloaded {vid}")
             return jsonify(
                 {
@@ -317,6 +330,152 @@ def download():
         logger.warning("Download failed for %s: %s", vid, exc)
         devlog.log_error("FETCH", 500, "/download", "yt_dlp", f"vid={vid} err={exc}")
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/is-downloaded")
+def api_is_downloaded():
+    video_id = request.args.get("video_id", "").strip()
+    if not video_id:
+        return jsonify({"downloaded": False})
+    path = downloads.get_download_path(video_id)
+    if path and not pathlib.Path(path).exists():
+        downloads.prune(video_id)
+        path = None
+    return jsonify({"downloaded": path is not None, "path": path or ""})
+
+
+@app.route("/api/downloaded-ids")
+def api_downloaded_ids():
+    return jsonify({"ids": downloads.get_downloaded_ids()})
+
+
+@app.route("/api/delete-download", methods=["POST"])
+def api_delete_download():
+    data = request.get_json(force=True)
+    video_id = data.get("video_id", "").strip()
+    if not video_id:
+        return jsonify({"error": "missing video_id"}), 400
+    if downloads.delete(video_id):
+        devlog.log_success("FETCH", 200, "/api/delete-download", "flow", f"deleted {video_id}")
+        return jsonify({"success": True})
+    return jsonify({"error": "not downloaded"}), 404
+
+
+@app.route("/api/playlists")
+def api_playlists():
+    return jsonify(
+        {
+            "playlists": [
+                {"name": n, "count": len(playlist.get(n))}
+                for n in playlist.list_all()
+            ]
+        }
+    )
+
+
+@app.route("/api/playlist")
+def api_playlist():
+    name = request.args.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "missing name"}), 400
+    if name not in playlist.list_all():
+        return jsonify({"error": "playlist not found"}), 404
+    songs = []
+    for s in playlist.get(name):
+        vid = s.get("video_id", "")
+        songs.append(
+            {
+                "title": s.get("title", "Unknown"),
+                "video_id": vid,
+                "url": s.get("url", ""),
+                "thumbnail": _full_res_thumbnail(
+                    f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
+                )
+                if vid
+                else "",
+                "channel": "" if vid else "Local",
+                "duration": 0,
+            }
+        )
+    return jsonify({"name": name, "songs": songs})
+
+
+@app.route("/api/playlists/create", methods=["POST"])
+def api_playlists_create():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "name cannot be empty"}), 400
+    if playlist.create(name):
+        return jsonify({"success": True, "name": name})
+    return jsonify({"error": f"playlist '{name}' already exists"}), 409
+
+
+@app.route("/api/playlists/delete", methods=["POST"])
+def api_playlists_delete():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    if playlist.delete(name):
+        return jsonify({"success": True})
+    return jsonify({"error": "playlist not found"}), 404
+
+
+@app.route("/api/playlist/add", methods=["POST"])
+def api_playlist_add():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    song = data.get("song") or {}
+    title = (song.get("title") or "").strip()
+    if not name or not title:
+        return jsonify({"error": "missing name or song title"}), 400
+    vid = song.get("video_id", "")
+    url = song.get("url", "") or (
+        f"https://www.youtube.com/watch?v={vid}" if vid else ""
+    )
+    playlist.add_song(name, title, vid, url)
+    return jsonify({"success": True, "name": name})
+
+
+@app.route("/api/playlist/remove", methods=["POST"])
+def api_playlist_remove():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    index = data.get("index")
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return jsonify({"error": "missing valid index"}), 400
+    ok, msg = playlist.remove_song(name, index=index)
+    if ok:
+        return jsonify({"success": True})
+    return jsonify({"error": msg}), 400
+
+
+@app.route("/api/playlists/save", methods=["POST"])
+def api_playlists_save():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    songs = data.get("songs") or []
+    mode = data.get("mode", "append")
+    if not name:
+        return jsonify({"error": "name cannot be empty"}), 400
+    if name not in playlist.list_all():
+        playlist.create(name)
+    elif mode == "overwrite":
+        playlist.delete(name)
+        playlist.create(name)
+    count = 0
+    for s in songs:
+        title = (s.get("title") or "").strip()
+        if not title:
+            continue
+        vid = s.get("video_id", "")
+        url = s.get("url", "") or (
+            f"https://www.youtube.com/watch?v={vid}" if vid else ""
+        )
+        playlist.add_song(name, title, vid, url)
+        count += 1
+    return jsonify({"success": True, "name": name, "count": count})
 
 
 @app.route("/local/<path:filepath>")

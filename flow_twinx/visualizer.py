@@ -7,11 +7,11 @@ BLOCK_SIZE = 4096
 SAMPLE_RATE = 48000
 MIN_FREQ = 60
 MAX_FREQ = 18000
-SENSITIVITY = 1.2
 
 FULL_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 
 _bars = None
+_peak = None
 _stream = None
 
 
@@ -32,9 +32,10 @@ def _log_bins(nfft, sr, num_bars):
 
 
 def _rebuild():
-    global _bars
+    global _bars, _peak
     n = config.BarWidth
     _bars = np.zeros(n)
+    _peak = None
     return _log_bins(BLOCK_SIZE, SAMPLE_RATE, n)
 
 
@@ -55,7 +56,7 @@ def _find_monitor():
 
 
 def _audio_callback(indata, frames, time_info, status):
-    global _bars
+    global _bars, _peak
     mono = np.mean(indata, axis=1)
     fft = np.abs(np.fft.rfft(mono))
 
@@ -63,33 +64,41 @@ def _audio_callback(indata, frames, time_info, status):
     if _bars is None or len(_bars) != n:
         return
 
+    overall_rms = np.sqrt(np.mean(mono ** 2))
+    if overall_rms <= 0.01:
+        _bars *= 0.4
+        if _peak is not None:
+            _peak *= 0.9
+        return
+
     levels = np.zeros(n)
     for i, mask in enumerate(_bins):
         if np.any(mask):
-            band_fft = fft[mask]
-            band_count = np.sum(mask)
-            band_rms = np.sqrt(np.mean(band_fft ** 2))
-            levels[i] = band_rms / np.sqrt(band_count) if band_count > 0 else 0
+            levels[i] = np.sqrt(np.mean(fft[mask] ** 2))
 
-    overall_rms = np.sqrt(np.mean(mono ** 2))
-    if overall_rms > 0.01:
-        normalized = np.clip(levels / overall_rms * SENSITIVITY, 0, 1)
+    peak = np.max(levels)
+    if _peak is None:
+        _peak = peak
     else:
-        normalized = levels
+        _peak = max(peak, 0.7 * _peak + 0.3 * peak)
+
+    if _peak > 1e-6:
+        normalized = np.clip(levels / _peak * config.Sensitivity, 0, 1)
+    else:
+        normalized = np.zeros(n)
 
     _bars = 0.4 * _bars + 0.6 * normalized
 
 
 def start():
-    global _stream, _bins
+    global _stream, _bins, _bars, _peak
     if _stream is not None:
         return
     dev = _find_monitor()
     if dev is None:
         return False
-    _bars_resized = np.zeros(config.BarWidth)
-    global _bars
-    _bars = _bars_resized
+    _bars = np.zeros(config.BarWidth)
+    _peak = None
     _bins = _log_bins(BLOCK_SIZE, SAMPLE_RATE, config.BarWidth)
     _stream = sd.InputStream(
         device=dev,

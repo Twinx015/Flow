@@ -550,7 +550,6 @@ body {
     height: 100%;
     object-fit: cover;
     display: block;
-    image-rendering: pixelated;
     transition: transform 0.2s steps(3);
 }
 
@@ -1054,6 +1053,7 @@ body.playing .pixel-wave span:nth-child(16) {
 }
 
 .song-card {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1119,7 +1119,6 @@ body.playing .pixel-wave span:nth-child(16) {
     object-fit: cover;
     flex-shrink: 0;
     border: 2px solid var(--border);
-    image-rendering: pixelated;
     box-shadow: 2px 2px 0 0 var(--shadow);
     transition: transform 0.1s steps(2);
 }
@@ -1228,6 +1227,12 @@ body.playing .pixel-wave span:nth-child(16) {
     box-shadow: 0 0 0 0 var(--shadow);
 }
 
+.local-btn.active {
+    color: var(--accent);
+    background: var(--surface);
+    box-shadow: 0 0 0 0 var(--shadow);
+}
+
 .primary-btn {
     background: var(--accent);
     color: var(--shadow);
@@ -1326,6 +1331,76 @@ body.playing .pixel-wave span:nth-child(16) {
     color: var(--text);
 }
 
+.playlist-card {
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px;
+    text-align: center;
+}
+
+.playlist-card i {
+    font-size: 28px;
+    margin-bottom: 4px;
+}
+
+.playlist-card small {
+    color: var(--text3);
+    font-size: 11px;
+    font-family: "ByteBounce", monospace;
+}
+
+.pl-menu {
+    position: fixed;
+    z-index: 300;
+    min-width: 160px;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--bg2);
+    border: 2px solid var(--border);
+    box-shadow: 4px 4px 0 0 var(--shadow);
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+}
+
+.pl-menu button {
+    background: none;
+    border: none;
+    color: var(--text);
+    text-align: left;
+    padding: 7px 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.1s steps(2);
+}
+
+.pl-menu button:hover {
+    background: var(--surface);
+    color: var(--accent);
+}
+
+.pl-menu .pl-menu-new {
+    border-top: 1px solid var(--surface2);
+    margin-top: 2px;
+    color: var(--accent);
+}
+
+.pl-menu .pl-menu-empty {
+    padding: 8px;
+    color: var(--text3);
+    font-size: 12px;
+}
+.exists-msg {
+    color: var(--text);
+    font-size: 14px;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.exists-actions {
+    gap: 8px;
+}
+
 .mini-player {
     position: fixed;
     bottom: 12px;
@@ -1352,7 +1427,6 @@ body.playing .pixel-wave span:nth-child(16) {
     object-fit: cover;
     flex-shrink: 0;
     border: 2px solid var(--border);
-    image-rendering: pixelated;
 }
 
 .mini-info {
@@ -1640,7 +1714,6 @@ body.playing .pixel-wave span:nth-child(16) {
     object-fit: cover;
     flex-shrink: 0;
     border: 2px solid var(--border);
-    image-rendering: pixelated;
 }
 
 .queue-bar-info {
@@ -1919,6 +1992,41 @@ body.playing .pixel-wave span:nth-child(16) {
 .ctrl-btn.downloading {
     color: var(--accent);
     animation: pixelBlink 0.4s steps(2) infinite;
+}
+
+.ctrl-btn.downloaded {
+    color: #22c55e;
+}
+
+.ctrl-btn.downloaded:hover {
+    color: var(--red, #ef4444);
+}
+
+.top-corner-btn {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 50;
+    animation: none;
+}
+
+.top-corner-btn:hover {
+    transform: rotate(90deg);
+}
+
+.downloaded-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    color: #22c55e;
+    font-size: 18px;
+    background: var(--bg3);
+    border: 1px solid var(--surface2);
+    border-radius: 4px;
+    padding: 1px 3px;
+    line-height: 1;
+    pointer-events: none;
+    box-shadow: 1px 1px 0 0 var(--shadow);
 }
 
 .setting-group input[type="text"] {

@@ -2,6 +2,7 @@ import errno
 import fcntl
 import json
 import os
+import pathlib
 import random
 import signal
 import sys
@@ -9,7 +10,7 @@ import termios
 import threading
 import time
 
-from .. import help_detail, playlist, shortcuts
+from .. import downloads, help_detail, playlist, shortcuts
 from ..imports import config, merge_flags
 from ..Offline import player as off_player
 from . import player, savan, youtube
@@ -66,6 +67,7 @@ COMMANDS = {
     "radio": "Generate a mix | radio <song> [index] | -p save as playlist | -d download",
     "like": "Like a song",
     "download": "Download audio from YouTube | -f <format> (opus, m4a, mp3, webm)",
+    "delete": "Delete a downloaded song (alias: dl-d)",
     "playlist": "Manage playlists (alias: plist)",
     "switch": "Switch to Offline mode",
     "help": "Show this help message",
@@ -105,6 +107,8 @@ def run(cmd: str, extra: list[str], args):
         like_track()
     elif cmd == "download":
         download(extra)
+    elif cmd in ("delete", "dl-d"):
+        delete_download(extra)
     elif cmd == "switch":
         switch_mode()
     elif cmd == "help":
@@ -717,6 +721,15 @@ def download(extra: list[str]):
         e("     No URL found for this entry")
         return
 
+    vid = entry.get("id") or ""
+    if vid:
+        existing = downloads.get_download_path(vid)
+        if existing:
+            existing_ext = pathlib.Path(existing).suffix.lstrip(".").lower()
+            if existing_ext == fmt:
+                i(f"    Already downloaded: {_truncate_title(title)}")
+                return
+
     label = f"Downloading: {_truncate_title(title)}"
     if fmt != "webm":
         label += f" → {fmt}"
@@ -732,6 +745,89 @@ def download(extra: list[str]):
         i(f"    Converted to {fmt}: {_truncate_title(title)}")
     else:
         i(f"    Downloaded: {_truncate_title(title)}")
+
+
+_AUDIO_EXTS = {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".opus", ".wma", ".aac", ".webm"}
+
+
+def _find_vid_by_path(index, path):
+    for _vid, info in index.items():
+        if info.get("path") == path:
+            return _vid
+    return None
+
+
+def delete_download(extra: list[str]):
+    global _last_results
+    arg = " ".join(extra) if extra else None
+    if not arg:
+        e("Usage: delete <name | index>")
+        return
+
+    vid = None
+    title = None
+    if arg.isdigit():
+        idx = int(arg) - 1
+        if idx < 0 or idx >= len(_last_results):
+            e("     Index out of range")
+            return
+        entry, title, _ = _last_results[idx]
+        vid = entry.get("id")
+    else:
+        index = downloads.load_index()
+        matches = [
+            (_vid, info.get("path"), info.get("title", ""))
+            for _vid, info in index.items()
+            if arg.lower() in info.get("title", "").lower()
+        ]
+        if len(matches) == 1:
+            vid, _, title = matches[0]
+        elif len(matches) > 1:
+            m("    Multiple matches:")
+            for i, (_vid, _path, t) in enumerate(matches, 1):
+                m(f"      {i}. {_truncate_title(t)}")
+            return
+        else:
+            candidates = [
+                f
+                for f in sorted(config.DOWNLOAD_DIR.rglob("*"))
+                if f.is_file()
+                and f.suffix.lower() in _AUDIO_EXTS
+                and arg.lower() in f.stem.lower()
+            ]
+            if not candidates:
+                e(f"     No downloaded song matching '{arg}'")
+                return
+            if len(candidates) > 1:
+                m("    Multiple matches:")
+                for i, f in enumerate(candidates, 1):
+                    m(f"      {i}. {f.stem}")
+                return
+            path = str(candidates[0])
+            vid = _find_vid_by_path(index, path)
+            title = candidates[0].stem
+
+    if not vid:
+        e("     No video id found for this song")
+        return
+
+    path = downloads.get_download_path(vid)
+    if not path:
+        e("     Song not found in downloads")
+        return
+
+    try:
+        ans = input(f"{M}Delete '{_truncate_title(title or pathlib.Path(path).stem)}'? (y/N) {R}")
+    except EOFError:
+        return
+    if ans.strip().lower() not in ("y", "yes"):
+        m("    Cancelled")
+        return
+
+    if downloads.delete(vid):
+        i(f"    Deleted: {_truncate_title(title or pathlib.Path(path).stem)}")
+    else:
+        e("     Nothing to delete")
 
 
 def switch_mode():

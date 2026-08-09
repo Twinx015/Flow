@@ -31,6 +31,7 @@ t = lambda t: print(f"{T}{t}{R}")
 _paused = False
 _player = None
 _original_term = None
+_radio_active = False
 _stop_reader = threading.Event()
 _reader_thread = None
 
@@ -44,6 +45,9 @@ def _sigusr1_toggle(sig, frame):
 
 def _setup_pause_input():
     global _original_term
+    if _radio_active:
+        signal.signal(signal.SIGUSR1, _sigusr1_toggle)
+        return
     fd = sys.stdin.fileno()
     try:
         _original_term = termios.tcgetattr(fd)
@@ -110,7 +114,7 @@ def _flags_str(args):
     return "  ".join(parts)
 
 
-def _display_loop(player, duration=0):
+def _display_loop(player, duration=0, stop_check=None):
     global _paused
     display = config.Display
     if display == "none":
@@ -123,6 +127,8 @@ def _display_loop(player, duration=0):
     paused_printed = False
     try:
         while player.get_state() not in (vlc.State.Ended, vlc.State.Error):
+            if stop_check and stop_check():
+                break
             if _paused:
                 if not paused_printed:
                     sys.stdout.write(f"\r  {T}[Paused]{R}  ")
@@ -150,7 +156,7 @@ def _display_loop(player, duration=0):
         sys.stdout.flush()
 
 
-def play_file(filepath, title, args=None):
+def play_file(filepath, title, args=None, flags=None):
     global _player, _paused
     _paused = False
     devnull = os.open(os.devnull, os.O_RDWR)
@@ -173,16 +179,26 @@ def play_file(filepath, title, args=None):
         if duration <= 0:
             duration = 0
         dur_min, dur_sec = divmod(int(duration), 60)
-        flags = _flags_str(args)
+        flags_str = _flags_str(args)
         i(f"\nPlaying : {_truncate_title(title)}")
         m(
-            f"    [{dur_min}:{dur_sec:02d}]  {flags}"
-            if flags
+            f"    [{dur_min}:{dur_sec:02d}]  {flags_str}"
+            if flags_str
             else f"    [{dur_min}:{dur_sec:02d}]"
         )
 
+        def stop_check():
+            if flags:
+                if flags.get("quit", lambda: False)():
+                    _player.stop()
+                    return True
+                if flags.get("skip", lambda: False)():
+                    _player.stop()
+                    return True
+            return False
+
         try:
-            _display_loop(_player, duration=duration)
+            _display_loop(_player, duration=duration, stop_check=stop_check)
         except KeyboardInterrupt:
             _player.stop()
             sys.stdout.write("\n")

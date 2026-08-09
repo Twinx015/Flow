@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-twinx"
-version = "0.5.1"
+version = "0.5.2"
 description = "A terminal music player with online and offline modes"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -29,6 +29,11 @@ include = ["flow_twinx*"]
 
 [tool.setuptools.package-data]
 flow_twinx = ["web/templates/*"]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.21.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/philast-015/flow/"

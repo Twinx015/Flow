@@ -80,6 +80,7 @@ Display = "bars"
 BarWidth = 20
 BarHeight = 10
 BarSpacing = 1
+Sensitivity = 1.0
 
 ####### Be carefull this will make everything print on screen including links title view and all things ###
 DEV_MODE = False
@@ -239,6 +240,8 @@ FILLER_WORDS = {
     "explicit",
     "clip",
     "old",
+    "#video",
+    "#song"
 }
 
 
@@ -259,6 +262,7 @@ def _load_config():
         BarWidth, \
         BarHeight, \
         BarSpacing, \
+        Sensitivity, \
         DEV_MODE, \
         FFMPEG, \
         FORMAT, \
@@ -294,6 +298,12 @@ def _load_config():
             and 0 <= data["bar_spacing"] <= 4
         ):
             BarSpacing = data["bar_spacing"]
+        if (
+            "sensitivity" in data
+            and isinstance(data["sensitivity"], (int, float))
+            and 0.5 <= data["sensitivity"] <= 5.0
+        ):
+            Sensitivity = data["sensitivity"]
         if "dev" in data and isinstance(data["dev"], bool):
             DEV_MODE = data["dev"]
         if "ffmpeg" in data and isinstance(data["ffmpeg"], bool):
@@ -318,6 +328,7 @@ def _save_config():
         "bar_width": BarWidth,
         "bar_height": BarHeight,
         "bar_spacing": BarSpacing,
+        "sensitivity": Sensitivity,
         "dev": DEV_MODE,
         "ffmpeg": FFMPEG,
         "format": FORMAT,
@@ -335,7 +346,7 @@ try:
 
     VERSION = _version("flow-twinx")
 except PackageNotFoundError:
-    VERSION = "0.4.6"
+    VERSION = "0.5.1"
 
 Mode = "Online"
 
@@ -390,6 +401,7 @@ def cmd_config(extra: list[str], args=None):
         BarWidth, \
         BarHeight, \
         BarSpacing, \
+        Sensitivity, \
         DEV_MODE, \
         FFMPEG, \
         FORMAT, \
@@ -404,6 +416,7 @@ def cmd_config(extra: list[str], args=None):
         print(f"  {Grey}barwidth{Reset}   (4-80, current: {BarWidth})")
         print(f"  {Grey}barheight{Reset}  (2-24, current: {BarHeight})")
         print(f"  {Grey}barspacing{Reset} (0-4, min, fit, max — current: {BarSpacing})")
+        print(f"  {Grey}sensitivity{Reset} (0.5-5.0, current: {Sensitivity})")
         print(f"  {Grey}format{Reset}     (opus, m4a, mp3, webm — current: {FORMAT})")
         print(f"  {Grey}max_search{Reset} (1-20, current: {MAX_SEARCH_RESULTS})")
         print(f"  {Grey}max_radio{Reset}  (1-50, current: {MAX_RESULTS_RADIO})")
@@ -490,6 +503,18 @@ def cmd_config(extra: list[str], args=None):
             BarSpacing = v
             _save_config()
             print(f"{Tertiary}Bar spacing changed to {v}{Reset}")
+    elif target == "sensitivity":
+        try:
+            v = float(extra[1])
+        except ValueError:
+            print("sensitivity must be a number (0.5-5.0)")
+            return
+        if not (0.5 <= v <= 5.0):
+            print("sensitivity must be between 0.5 and 5.0")
+            return
+        Sensitivity = v
+        _save_config()
+        print(f"{Tertiary}Sensitivity changed to {v}{Reset}")
     elif target == "dev":
         if value not in ("true", "false"):
             print("Usage: config dev true/false")

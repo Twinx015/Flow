@@ -1,6 +1,13 @@
+import errno
+import fcntl
 import os
 import pathlib
 import random
+import signal
+import sys
+import termios
+import threading
+import time
 
 from .. import help_detail, playlist, shortcuts
 from ..imports import config, is_connected, merge_flags
@@ -44,10 +51,25 @@ except ImportError:
 _last_results = []
 _last_played = None
 
+_radio_quit = False
+_radio_skip = False
+
+
+def _radio_sigint(sig, frame):
+    global _radio_skip
+    _radio_skip = True
+
+
+def _radio_sigquit(sig, frame):
+    global _radio_quit
+    _radio_quit = True
+
+
 COMMANDS = {
     "play": "Play song(s) from local library | all by play all | and liked",
     "search": "Search local music library",
     "list": "List local music library",
+    "radio": "Radio mode | shuffle & loop library | Ctrl+C next | Ctrl+Q quit",
     "like": "Like the currently playing song",
     "playlist": "Manage playlists (alias: plist)",
     "switch": "Switch to Online mode (checks connection)",
@@ -110,6 +132,8 @@ def run(cmd: str, extra: list[str], args):
         search(" ".join(extra) if extra else "")
     elif cmd == "list":
         list_library()
+    elif cmd in ("radio", "rd"):
+        radio(extra, args)
     elif cmd == "like":
         like_track()
     elif cmd in ("playlist", "plist"):
@@ -465,6 +489,100 @@ def switch_mode():
         config.Mode = "Online"
     else:
         e("No internet connection")
+
+
+def radio(extra, args):
+    global _last_played, _radio_quit, _radio_skip
+    tracks = lib.get_all_songs()
+    if not tracks:
+        e("No songs in library")
+        return
+    tracks = list(tracks)
+    random.shuffle(tracks)
+
+    if getattr(args, "bg", False):
+        if not _fork_bg(f"Radio playing {len(tracks)} tracks"):
+            return
+
+    _radio_quit = False
+    _radio_skip = False
+
+    old_sigint = signal.signal(signal.SIGINT, _radio_sigint)
+    old_sigquit = signal.signal(signal.SIGQUIT, _radio_sigquit)
+    old_sigusr1 = signal.getsignal(signal.SIGUSR1)
+
+    fd = sys.stdin.fileno()
+    old_term = None
+    old_fd_flags = None
+    try:
+        old_term = termios.tcgetattr(fd)
+        new = termios.tcgetattr(fd)
+        new[0] &= ~termios.IXON
+        new[6][termios.VQUIT] = 0x11
+        new[6][termios.VSUSP] = 0
+        termios.tcsetattr(fd, termios.TCSADRAIN, new)
+        old_fd_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_fd_flags | os.O_NONBLOCK)
+    except (termios.error, OSError):
+        pass
+
+    def _radio_sigusr1(sig, frame):
+        player._sigusr1_toggle(sig, frame)
+
+    signal.signal(signal.SIGUSR1, _radio_sigusr1)
+    signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    player._radio_active = True
+
+    radio_stop = threading.Event()
+
+    def _radio_input_reader():
+        try:
+            while not radio_stop.is_set():
+                try:
+                    ch = os.read(fd, 1)
+                except OSError as ex:
+                    if ex.errno == errno.EAGAIN:
+                        time.sleep(0.05)
+                        continue
+                    break
+                if ch == b"\x10":
+                    os.kill(os.getpid(), signal.SIGUSR1)
+        except OSError:
+            pass
+
+    radio_reader = threading.Thread(target=_radio_input_reader, daemon=True)
+    radio_reader.start()
+
+    flags = {"quit": lambda: _radio_quit, "skip": lambda: _radio_skip}
+
+    i(f"\n[Radio] Playing {len(tracks)} songs (Ctrl+C next, Ctrl+Q quit)")
+    try:
+        while True:
+            for song in tracks:
+                _radio_skip = False
+                _last_played = song
+                player.play_file(song, song.stem, args, flags=flags)
+                if _radio_quit:
+                    break
+            if _radio_quit:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        player._radio_active = False
+        radio_stop.set()
+        if radio_reader.is_alive():
+            radio_reader.join(timeout=0.2)
+        if old_term is not None:
+            try:
+                if old_fd_flags is not None:
+                    fcntl.fcntl(fd, fcntl.F_SETFL, old_fd_flags)
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_term)
+            except (termios.error, OSError):
+                pass
+        signal.signal(signal.SIGINT, old_sigint)
+        signal.signal(signal.SIGQUIT, old_sigquit)
+        signal.signal(signal.SIGUSR1, old_sigusr1)
 
 
 def show_help(inf=False):

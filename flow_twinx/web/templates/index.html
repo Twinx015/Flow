@@ -2,7 +2,7 @@
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=0.7" />
         <title>Flow Music</title>
         <link rel="stylesheet" href="/static/style.css" />
         <link
@@ -12,6 +12,13 @@
     </head>
     <body>
         <div id="app" class="full-player">
+            <button
+                id="settingsBtn"
+                class="ctrl-btn top-corner-btn"
+                title="Settings"
+            >
+                <i class="bi bi-gear"></i>
+            </button>
             <div class="player-main" id="playerMain">
                 <div class="player-bg" id="playerBg"></div>
                 <div class="scanlines"></div>
@@ -150,8 +157,12 @@
                         <button class="tab" data-tab="liked" title="Liked">
                             <i class="bi bi-heart"></i>Liked
                         </button>
-                        <button id="settingsBtn" class="tab" title="Settings">
-                            <i class="bi bi-gear"></i>
+                        <button
+                            class="tab"
+                            data-tab="playlists"
+                            title="Playlists"
+                        >
+                            <i class="bi bi-music-note-list"></i>Playlists
                         </button>
                     </div>
                 </div>
@@ -161,6 +172,13 @@
                     </div>
                     <div class="tab-content" id="tabLocal">
                         <div class="local-actions">
+                            <button
+                                id="localShuffleBtn"
+                                class="local-btn"
+                                title="Shuffle"
+                            >
+                                <i class="bi bi-shuffle"></i>
+                            </button>
                             <button
                                 id="scanLocalBtn"
                                 class="local-btn"
@@ -184,6 +202,26 @@
                             </button>
                         </div>
                         <div id="likedSongs" class="results-grid"></div>
+                    </div>
+                    <div class="tab-content" id="tabPlaylists">
+                        <div class="local-actions">
+                            <button
+                                id="newPlaylistBtn"
+                                class="local-btn"
+                                title="New Playlist"
+                            >
+                                <i class="bi bi-plus-lg"></i>
+                            </button>
+                            <button
+                                id="refreshPlaylistsBtn"
+                                class="local-btn"
+                                title="Refresh"
+                            >
+                                <i class="bi bi-arrow-clockwise"></i>
+                            </button>
+                        </div>
+                        <div class="albums-grid" id="playlistsGrid"></div>
+                        <div class="album-songs" id="playlistSongs"></div>
                     </div>
                 </div>
             </div>
@@ -388,6 +426,68 @@
                             title="Save"
                         >
                             <i class="bi bi-check-lg"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-overlay" id="playlistModal">
+                <div class="modal">
+                    <div class="modal-header">
+                        <h2 id="playlistModalTitle"
+                            ><i class="bi bi-music-note-list"></i> Save as
+                            Playlist</h2
+                        >
+                        <button id="closePlaylistModal" class="modal-close">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="setting-group">
+                            <label
+                                ><i class="bi bi-fonts"></i> Playlist
+                                Name</label
+                            >
+                            <input
+                                type="text"
+                                id="playlistNameInput"
+                                placeholder="My Playlist"
+                                maxlength="60"
+                            />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button
+                            id="savePlaylistBtn"
+                            class="local-btn primary-btn"
+                            title="Save"
+                        >
+                            <i class="bi bi-check-lg"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-overlay" id="playlistExistsModal">
+                <div class="modal">
+                    <div class="modal-header">
+                        <h2><i class="bi bi-exclamation-triangle"></i></h2>
+                        <button id="closeExistsModal" class="modal-close">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <p id="existsMsg" class="exists-msg"></p>
+                    </div>
+                    <div class="modal-footer exists-actions">
+                        <button id="existsAppendBtn" class="local-btn">
+                            Append
+                        </button>
+                        <button
+                            id="existsOverwriteBtn"
+                            class="local-btn primary-btn"
+                        >
+                            Overwrite
                         </button>
                     </div>
                 </div>

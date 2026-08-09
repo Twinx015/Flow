@@ -1,7 +1,9 @@
 import logging
+import pathlib
 
 import yt_dlp
 
+from .. import downloads
 from ..imports import config
 
 logger = logging.getLogger(__name__)
@@ -97,6 +99,9 @@ def download_url(url, outdir, fmt=None):
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
+            if fmt and fmt != "webm":
+                stem = pathlib.Path(filename).stem
+                filename = str(pathlib.Path(outdir) / f"{stem}.{fmt}")
     except Exception as exc:
         logger.warning("Download failed for %s: %s", url, exc)
         raise
@@ -110,6 +115,7 @@ def download_url(url, outdir, fmt=None):
             "filesize": info.get("filesize") or info.get("filesize_approx"),
         },
     )
+    downloads.track(info.get("id"), filename, info.get("title", "Unknown"))
     return filename
 
 

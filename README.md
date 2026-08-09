@@ -108,7 +108,8 @@ flow --web
 | `list`                 | Show all songs, albums, or liked tracks           |
 | `like`                 | Like/unlike the currently playing song            |
 | `download <name or #>` | Save a streamed song to the local library         |
-| `radio <name> [#]`     | Generate a radio mix, or play specific track      |
+| `delete <name or #>`   | Delete a downloaded song (alias: `dl-d`)         |
+| `radio <name> [#]`     | Radio mix (online) or shuffle-loop library (offline) |
 | `playlist <sub>`       | Manage playlists (create/add/remove/play)        |
 | `export`               | Backup ~/.flow config to ~/Downloads              |
 | `switch`               | Toggle between online and offline mode            |

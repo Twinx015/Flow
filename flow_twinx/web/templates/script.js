@@ -32,6 +32,7 @@ const srcLocal = document.getElementById("srcLocal");
 const clearQueueBtn = document.getElementById("clearQueueBtn");
 const queueContainer = document.getElementById("queueContainer");
 const scanLocalBtn = document.getElementById("scanLocalBtn");
+const localShuffleBtn = document.getElementById("localShuffleBtn");
 const albumsGrid = document.getElementById("albumsGrid");
 const albumSongs = document.getElementById("albumSongs");
 const localSongsContainer = document.getElementById("localSongs");
@@ -48,6 +49,20 @@ const toastEl = document.getElementById("toast");
 const setDownloadPath = document.getElementById("setDownloadPath");
 const refreshLikedBtn = document.getElementById("refreshLikedBtn");
 const likeBtn = document.getElementById("likeBtn");
+const newPlaylistBtn = document.getElementById("newPlaylistBtn");
+const refreshPlaylistsBtn = document.getElementById("refreshPlaylistsBtn");
+const playlistsGrid = document.getElementById("playlistsGrid");
+const playlistSongs = document.getElementById("playlistSongs");
+const playlistModal = document.getElementById("playlistModal");
+const closePlaylistModal = document.getElementById("closePlaylistModal");
+const playlistModalTitle = document.getElementById("playlistModalTitle");
+const playlistNameInput = document.getElementById("playlistNameInput");
+const savePlaylistBtn = document.getElementById("savePlaylistBtn");
+const playlistExistsModal = document.getElementById("playlistExistsModal");
+const closeExistsModal = document.getElementById("closeExistsModal");
+const existsMsg = document.getElementById("existsMsg");
+const existsAppendBtn = document.getElementById("existsAppendBtn");
+const existsOverwriteBtn = document.getElementById("existsOverwriteBtn");
 
 let queue = [];
 let queueIndex = -1;
@@ -60,6 +75,13 @@ let searchSource = "youtube";
 let activeTab = "search";
 let localTracks = [];
 let currentTrackType = null;
+let downloadedIds = new Set();
+let currentDownloaded = false;
+let playlistsCache = [];
+let currentPlaylistName = null;
+let pendingPlaylist = null;
+let pendingSong = null;
+let playlistModalMode = "saveQueue";
 
 let settings = {
   theme: "dark",
@@ -67,7 +89,7 @@ let settings = {
   bgBlur: 10,
   bgDim: 60,
   defaultVolume: 80,
-  crossfade: 2,
+  crossfade: 0,
   miniOnBlur: false,
   defaultSource: "youtube",
   format: "webm",
@@ -85,7 +107,7 @@ let searchTimer = null;
 
 function debounceSearch() {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => doSearch(), 800);
+  searchTimer = setTimeout(() => doSearch(), 1000);
 }
 
 searchInput.addEventListener("input", debounceSearch);
@@ -125,6 +147,7 @@ miniPlayBtn.addEventListener("click", togglePlay);
 prevBtn.addEventListener("click", prevTrack);
 nextBtn.addEventListener("click", nextTrack);
 shuffleBtn.addEventListener("click", toggleShuffle);
+localShuffleBtn.addEventListener("click", localShufflePlay);
 repeatBtn.addEventListener("click", toggleRepeat);
 volumeSlider.addEventListener("input", (e) => {
   audio.volume = e.target.value / 100;
@@ -146,9 +169,11 @@ progressBar.addEventListener("click", (e) => {
 });
 
 clearQueueBtn.addEventListener("click", clearQueue);
-document.getElementById("saveQueueBtn").addEventListener("click", saveQueue);
+document.getElementById("saveQueueBtn").addEventListener("click", openSavePlaylistModal);
 scanLocalBtn.addEventListener("click", scanLocal);
 refreshLikedBtn.addEventListener("click", loadLiked);
+newPlaylistBtn.addEventListener("click", openNewPlaylistModal);
+refreshPlaylistsBtn.addEventListener("click", loadPlaylists);
 
 miniExpandBtn.addEventListener("click", () => {
   miniPlayer.style.display = "none";
@@ -169,6 +194,35 @@ settingsModal.addEventListener("click", (e) => {
 });
 saveSettings.addEventListener("click", saveSettingsToAPI);
 resetSettingsBtn.addEventListener("click", resetSettings);
+
+playlistModal.addEventListener("click", (e) => {
+  if (e.target === playlistModal) playlistModal.classList.remove("open");
+});
+closePlaylistModal.addEventListener("click", () =>
+  playlistModal.classList.remove("open"),
+);
+playlistNameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitPlaylistModal();
+});
+savePlaylistBtn.addEventListener("click", submitPlaylistModal);
+playlistExistsModal.addEventListener("click", (e) => {
+  if (e.target === playlistExistsModal) playlistExistsModal.classList.remove("open");
+});
+closeExistsModal.addEventListener("click", () =>
+  playlistExistsModal.classList.remove("open"),
+);
+existsAppendBtn.addEventListener("click", () => {
+  if (pendingPlaylist) {
+    doSavePlaylist(pendingPlaylist.name, pendingPlaylist.songs, "append");
+  }
+  playlistExistsModal.classList.remove("open");
+});
+existsOverwriteBtn.addEventListener("click", () => {
+  if (pendingPlaylist) {
+    doSavePlaylist(pendingPlaylist.name, pendingPlaylist.songs, "overwrite");
+  }
+  playlistExistsModal.classList.remove("open");
+});
 
 autoPlayToggle.addEventListener("change", (e) => {
   autoPlay = e.target.checked;
@@ -269,6 +323,7 @@ function loadAndPlay(track) {
   updateBg(track.thumbnail);
   updateQueueBar();
   checkLiked(track.video_id);
+  checkDownload(track.video_id);
 
   if (currentTrackType === "local") {
     let encodedPath = encodeURI(track.path);
@@ -297,20 +352,43 @@ function loadAndPlay(track) {
   }
 }
 
+const artFrame = "/static/Frame%201.jpg";
+
+function applyArt(img, url) {
+  if (!url || !url.trim()) {
+    img.onerror = null;
+    img.src = artFrame;
+    return;
+  }
+  img.onerror = () => {
+    const cur = img.src;
+    img.onerror = null;
+    if (cur.includes("maxresdefault.jpg")) {
+      img.src = cur.replace("maxresdefault.jpg", "hqdefault.jpg");
+    } else {
+      img.src = artFrame;
+    }
+  };
+  img.src = url;
+}
+
+function artImgTag(url) {
+  if (!url || !url.trim()) {
+    return `<img src="${artFrame}" alt="" loading="lazy">`;
+  }
+  const onerr =
+    "this.onerror=null;if(this.src.includes('maxresdefault.jpg')){this.src=this.src.replace('maxresdefault.jpg','hqdefault.jpg')}else{this.src='/static/Frame%201.jpg'}";
+  return `<img src="${url}" onerror="${onerr}" alt="" loading="lazy">`;
+}
+
 function setDisplayInfo(track) {
   trackTitle.textContent = track.title || "Unknown";
   trackArtist.textContent = track.channel || track.artist || "";
-  albumArt.src =
-    track.thumbnail && track.thumbnail.trim() !== ""
-      ? track.thumbnail
-      : "/static/Frame%201.jpg";
+  applyArt(albumArt, track.thumbnail);
 }
 
 function updateMiniPlayer(track) {
-  miniArt.src =
-    track.thumbnail && track.thumbnail.trim() !== ""
-      ? track.thumbnail
-      : "/static/Frame%201.jpg";
+  applyArt(miniArt, track.thumbnail);
   miniTitle.textContent = track.title || "Unknown";
   miniArtist.textContent = track.channel || track.artist || "";
 }
@@ -448,6 +526,17 @@ function nextTrack() {
 function toggleShuffle() {
   isShuffled = !isShuffled;
   shuffleBtn.classList.toggle("active", isShuffled);
+  if (localShuffleBtn) localShuffleBtn.classList.toggle("active", isShuffled);
+}
+
+function localShufflePlay() {
+  if (localTracks.length === 0) {
+    showToast("No local music to shuffle");
+    return;
+  }
+  if (!isShuffled) toggleShuffle();
+  const randomIdx = Math.floor(Math.random() * localTracks.length);
+  playLocal(localTracks[randomIdx], localTracks);
 }
 
 function toggleRepeat() {
@@ -482,7 +571,7 @@ function searchYouTube(query) {
       resultsContainer.innerHTML = "";
       res.forEach((item) => {
         const card = createSongCard(item, "yt");
-        card.addEventListener("click", () => playTrack(item));
+        card.addEventListener("click", () => playTrack(item, res));
         const addBtn = card.querySelector(".song-actions button");
         addBtn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -490,6 +579,7 @@ function searchYouTube(query) {
         });
         resultsContainer.appendChild(card);
       });
+      markDownloadedCards();
     })
     .catch(() => {});
 }
@@ -510,7 +600,7 @@ function searchLocal(query) {
           { ...item, thumbnail: "", channel: "Local Music", duration: 0 },
           "local",
         );
-        card.addEventListener("click", () => playLocal(item));
+        card.addEventListener("click", () => playLocal(item, res));
         const addBtn = card.querySelector(".song-actions button");
         addBtn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -518,6 +608,7 @@ function searchLocal(query) {
         });
         resultsContainer.appendChild(card);
       });
+      markDownloadedCards();
     })
     .catch(() => {});
 }
@@ -528,12 +619,10 @@ function createSongCard(data, type) {
   card.dataset.title = data.title;
   card.dataset.videoId = data.video_id || "";
   card.dataset.path = data.path || "";
-  const thumb =
-    data.thumbnail && data.thumbnail.trim() !== ""
-      ? data.thumbnail
-      : "/static/Frame%201.jpg";
+  const downloaded =
+    data.video_id && downloadedIds.has(data.video_id);
   card.innerHTML = `
-    <img src="${thumb}" alt="" loading="lazy">
+    ${artImgTag(data.thumbnail)}
     <div class="song-info">
       <div class="song-title">${data.title || "Unknown"}</div>
       <div class="song-artist">${data.channel || data.artist || "Unknown"}</div>
@@ -541,25 +630,39 @@ function createSongCard(data, type) {
     ${data.duration ? `<span class="song-duration">${formatTime(data.duration)}</span>` : ""}
     <div class="song-actions">
       <button title="Add to queue"><i class="bi bi-plus-lg"></i></button>
+      <button class="pl-add-btn" title="Add to playlist"><i class="bi bi-music-note-list"></i></button>
     </div>
+    ${downloaded ? '<span class="downloaded-badge" title="Downloaded"><i class="bi bi-check-circle-fill"></i></span>' : ""}
   `;
+  const plBtn = card.querySelector(".pl-add-btn");
+  plBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openPlaylistMenu(plBtn, data);
+  });
   return card;
 }
 
-function playTrack(item) {
+function playTrack(item, list) {
+  const src = list && list.length ? list : [item];
+  const tracks = src.map((t) => ({ ...t, source: "yt" }));
   addHistory();
-  queue = [item];
-  queueIndex = 0;
-  loadAndPlay(queue[0]);
+  queue = tracks;
+  queueIndex = Math.max(0, queue.findIndex((e) => e.video_id === item.video_id));
+  loadAndPlay(queue[queueIndex]);
   renderQueue();
 }
 
-function playLocal(item) {
-  const entry = { ...item, source: "local", channel: "Local Music" };
+function playLocal(item, list) {
+  const src = list && list.length ? list : localTracks.length ? localTracks : [item];
+  const tracks = src.map((t) => ({
+    ...t,
+    source: "local",
+    channel: t.channel || t.album || "Local Music",
+  }));
   addHistory();
-  queue = [entry];
-  queueIndex = 0;
-  loadAndPlay(queue[0]);
+  queue = tracks;
+  queueIndex = Math.max(0, queue.findIndex((e) => e.path === item.path));
+  loadAndPlay(queue[queueIndex]);
   renderQueue();
 }
 
@@ -597,13 +700,14 @@ function renderQueue() {
     card.className =
       "song-card" +
       (idx === queueIndex && item === queue[queueIndex] ? " active" : "");
-    const thumb =
-      item.thumbnail && item.thumbnail.trim() !== ""
-        ? item.thumbnail
-        : "/static/Frame%201.jpg";
+    card.dataset.title = item.title;
+    card.dataset.videoId = item.video_id || "";
+    card.dataset.path = item.path || "";
     const dur = item.duration || "";
+    const downloaded =
+      item.video_id && downloadedIds.has(item.video_id);
     card.innerHTML = `
-      <img src="${thumb}" alt="" loading="lazy">
+      ${artImgTag(item.thumbnail)}
       <div class="song-info">
         <div class="song-title">${item.title}</div>
         <div class="song-artist">${item.channel || item.artist || "Unknown"}</div>
@@ -611,7 +715,9 @@ function renderQueue() {
       ${dur ? `<span class="song-duration">${formatTime(dur)}</span>` : ""}
       <div class="song-actions">
         <button class="queue-remove" data-idx="${idx}" title="Remove"><i class="bi bi-x-lg"></i></button>
+        <button class="pl-add-btn" title="Add to playlist"><i class="bi bi-music-note-list"></i></button>
       </div>
+      ${downloaded ? '<span class="downloaded-badge" title="Downloaded"><i class="bi bi-check-circle-fill"></i></span>' : ""}
     `;
     card.addEventListener("click", () => {
       addHistory();
@@ -623,6 +729,10 @@ function renderQueue() {
       e.stopPropagation();
       removeFromQueue(parseInt(e.currentTarget.dataset.idx));
     });
+    card.querySelector(".pl-add-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPlaylistMenu(e.currentTarget, item);
+    });
     queueContainer.appendChild(card);
   });
   updateQueueBar();
@@ -633,17 +743,13 @@ function updateQueueBar() {
   if (queue.length > 0 && nextIdx < queue.length) {
     const nextTrack = queue[nextIdx];
     queueBarTitle.textContent = nextTrack.title || "Unknown";
-    const thumb =
-      nextTrack.thumbnail && nextTrack.thumbnail.trim() !== ""
-        ? nextTrack.thumbnail
-        : "/static/Frame%201.jpg";
-    queueBarArt.src = thumb;
+    applyArt(queueBarArt, nextTrack.thumbnail);
   } else if (queue.length > 0) {
     queueBarTitle.textContent = "End of queue";
-    queueBarArt.src = "/static/Frame%201.jpg";
+    applyArt(queueBarArt, "");
   } else {
     queueBarTitle.textContent = "Queue empty";
-    queueBarArt.src = "/static/Frame%201.jpg";
+    applyArt(queueBarArt, "");
   }
   updateQueueBarInfo();
 }
@@ -696,10 +802,7 @@ function scanLocal() {
   fetch("/api/albums")
     .then((r) => r.json())
     .then((data) => {
-      albumsGrid.innerHTML =
-        data.albums && data.albums.length
-          ? ""
-          : '<div style="color:var(--text3);font-size:13px;grid-column:1/-1;">No albums found</div>';
+      albumsGrid.innerHTML = "";
       (data.albums || []).forEach((album) => {
         const card = document.createElement("div");
         card.className = "album-card";
@@ -729,7 +832,7 @@ function showAlbumSongs(album) {
           thumbnail: "",
         };
         const card = createSongCard(entry, "local");
-        card.addEventListener("click", () => playLocal(entry));
+        card.addEventListener("click", () => playLocal(entry, songs));
         const addBtn = card.querySelector(".song-actions button");
         addBtn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -750,7 +853,7 @@ function loadLocalTracks() {
   localSongsContainer.innerHTML = "";
   localTracks.forEach((t) => {
     const card = createSongCard(t, "local");
-    card.addEventListener("click", () => playLocal(t));
+    card.addEventListener("click", () => playLocal(t, localTracks));
     const addBtn = card.querySelector(".song-actions button");
     addBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -760,17 +863,330 @@ function loadLocalTracks() {
   });
 }
 
-function saveQueue() {
-  if (queue.length === 0) return;
-  const blob = new Blob([JSON.stringify(queue, null, 2)], {
-    type: "application/json",
+function toPlaylistSong(track) {
+  const song = { title: (track.title || "Unknown").trim() };
+  if (track.video_id) {
+    song.video_id = track.video_id;
+    song.url = `https://www.youtube.com/watch?v=${track.video_id}`;
+  } else if (track.path) {
+    song.url = track.path;
+  }
+  return song;
+}
+
+function openSavePlaylistModal() {
+  const songs = queue.filter((t) => !t._autoAdded);
+  if (songs.length === 0) {
+    showToast("Queue is empty");
+    return;
+  }
+  playlistModalMode = "saveQueue";
+  playlistModalTitle.innerHTML =
+    '<i class="bi bi-music-note-list"></i> Save as Playlist';
+  playlistNameInput.value = "";
+  playlistModal.classList.add("open");
+  setTimeout(() => playlistNameInput.focus(), 50);
+}
+
+function openNewPlaylistModal() {
+  playlistModalMode = "create";
+  playlistModalTitle.innerHTML =
+    '<i class="bi bi-plus-lg"></i> New Playlist';
+  playlistNameInput.value = "";
+  playlistModal.classList.add("open");
+  setTimeout(() => playlistNameInput.focus(), 50);
+}
+
+function submitPlaylistModal() {
+  const name = playlistNameInput.value.trim();
+  if (!name) {
+    showToast("Enter a playlist name");
+    return;
+  }
+  if (playlistModalMode === "create") {
+    createPlaylist(name).then((ok) => {
+      if (ok) playlistModal.classList.remove("open");
+    });
+    return;
+  }
+  if (playlistModalMode === "song") {
+    if (pendingSong) addSongToPlaylist(name, pendingSong);
+    playlistModal.classList.remove("open");
+    pendingSong = null;
+    return;
+  }
+  const songs = queue.filter((t) => !t._autoAdded).map(toPlaylistSong);
+  if (songs.length === 0) {
+    showToast("No playable tracks in queue");
+    return;
+  }
+  pendingPlaylist = { name, songs };
+  fetch("/api/playlists")
+    .then((r) => r.json())
+    .then((data) => {
+      const exists = (data.playlists || []).some((p) => p.name === name);
+      if (exists) {
+        openExistsDialog(name, songs);
+        playlistModal.classList.remove("open");
+      } else {
+        doSavePlaylist(name, songs, "append");
+      }
+    });
+}
+
+function doSavePlaylist(name, songs, mode) {
+  fetch("/api/playlists/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, songs, mode }),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.success) {
+        playlistModal.classList.remove("open");
+        showToast(`Saved ${data.count} song${data.count !== 1 ? "s" : ""} to "${name}"`);
+        loadPlaylists();
+      } else {
+        showToast("Failed: " + (data.error || "Unknown error"));
+      }
+    })
+    .catch(() => showToast("Save failed"));
+}
+
+function openExistsDialog(name, songs) {
+  pendingPlaylist = { name, songs };
+  existsMsg.textContent = `Playlist "${name}" already exists. Append or overwrite?`;
+  playlistExistsModal.classList.add("open");
+}
+
+function loadPlaylists() {
+  fetch("/api/playlists")
+    .then((r) => r.json())
+    .then((data) => {
+      playlistsCache = data.playlists || [];
+      renderPlaylists();
+    })
+    .catch(() => {});
+}
+
+function renderPlaylists() {
+  playlistsGrid.innerHTML = playlistsCache.length
+    ? ""
+    : '<div style="color:var(--text3);font-size:13px;grid-column:1/-1;">No playlists yet</div>';
+  playlistsCache.forEach((p) => {
+    const card = document.createElement("div");
+    card.className = "album-card playlist-card";
+    card.innerHTML = `<i class="bi bi-music-note-list"></i><span>${p.name}</span><small>${p.count} song${p.count !== 1 ? "s" : ""}</small>`;
+    card.addEventListener("click", () => openPlaylist(p.name));
+    playlistsGrid.appendChild(card);
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "queue.json";
-  a.click();
-  URL.revokeObjectURL(url);
+}
+
+function openPlaylist(name) {
+  currentPlaylistName = name;
+  fetch(`/api/playlist?name=${encodeURIComponent(name)}`)
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.error) {
+        showToast(data.error);
+        return;
+      }
+      renderPlaylistDetail(data.name, data.songs || []);
+    })
+    .catch(() => {});
+}
+
+function renderPlaylistDetail(name, songs) {
+  playlistSongs.innerHTML = `<div class="album-header">
+    <button id="plBackBtn" title="Back"><i class="bi bi-arrow-left"></i></button>
+    <span>${name}</span>
+    <button id="plPlayBtn" title="Play"><i class="bi bi-play-fill"></i></button>
+    <button id="plDeleteBtn" title="Delete playlist"><i class="bi bi-trash"></i></button>
+  </div>`;
+  document.getElementById("plBackBtn").addEventListener("click", () => {
+    playlistSongs.innerHTML = "";
+  });
+  document.getElementById("plPlayBtn").addEventListener("click", () =>
+    playPlaylist(songs),
+  );
+  document.getElementById("plDeleteBtn").addEventListener("click", () =>
+    deletePlaylist(name),
+  );
+  if (songs.length === 0) {
+    playlistSongs.insertAdjacentHTML(
+      "beforeend",
+      '<div style="color:var(--text3);text-align:center;padding:20px;font-size:13px;">Playlist is empty</div>',
+    );
+    return;
+  }
+  songs.forEach((item, idx) => {
+    const entry = {
+      ...item,
+      source: item.video_id ? "yt" : "local",
+      channel: item.channel || "Playlist",
+      duration: item.duration || 0,
+    };
+    const card = createSongCard(entry, entry.source);
+    card.addEventListener("click", () => playPlaylist(songs, idx));
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "pl-remove";
+    removeBtn.title = "Remove from playlist";
+    removeBtn.innerHTML = '<i class="bi bi-x-lg"></i>';
+    removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeFromPlaylist(name, idx);
+    });
+    card.querySelector(".song-actions").appendChild(removeBtn);
+    playlistSongs.appendChild(card);
+  });
+}
+
+function playPlaylist(songs, startIdx) {
+  if (!songs.length) return;
+  startIdx = startIdx || 0;
+  const entries = songs.map((s) => ({
+    ...s,
+    source: s.video_id ? "yt" : "local",
+    channel: s.channel || "Playlist",
+    duration: s.duration || 0,
+  }));
+  addHistory();
+  queue = entries;
+  queueIndex = Math.min(startIdx, entries.length - 1);
+  loadAndPlay(queue[queueIndex]);
+  renderQueue();
+}
+
+function deletePlaylist(name) {
+  if (!window.confirm(`Delete playlist "${name}"?`)) return;
+  fetch("/api/playlists/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.success) {
+        showToast(`Deleted "${name}"`);
+        playlistSongs.innerHTML = "";
+        loadPlaylists();
+      } else {
+        showToast("Failed: " + (data.error || "Unknown error"));
+      }
+    })
+    .catch(() => showToast("Delete failed"));
+}
+
+function removeFromPlaylist(name, index) {
+  fetch("/api/playlist/remove", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, index }),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.success) {
+        showToast("Removed from playlist");
+        loadPlaylists();
+        openPlaylist(name);
+      } else {
+        showToast("Failed: " + (data.error || "Unknown error"));
+      }
+    })
+    .catch(() => showToast("Remove failed"));
+}
+
+function createPlaylist(name) {
+  return fetch("/api/playlists/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.success) {
+        showToast(`Created "${name}"`);
+        loadPlaylists();
+        return true;
+      }
+      showToast("Failed: " + (data.error || "Unknown error"));
+      return false;
+    })
+    .catch(() => {
+      showToast("Create failed");
+      return false;
+    });
+}
+
+function addSongToPlaylist(name, track) {
+  const song = toPlaylistSong(track);
+  fetch("/api/playlist/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, song }),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.success) {
+        showToast(`Added to "${name}"`);
+        loadPlaylists();
+      } else {
+        showToast("Failed: " + (data.error || "Unknown error"));
+      }
+    })
+    .catch(() => showToast("Add failed"));
+}
+
+function openPlaylistMenu(btn, track) {
+  closePlaylistMenu();
+  const menu = document.createElement("div");
+  menu.className = "pl-menu";
+  if (!playlistsCache.length) {
+    const empty = document.createElement("div");
+    empty.className = "pl-menu-empty";
+    empty.textContent = "No playlists yet";
+    menu.appendChild(empty);
+  }
+  playlistsCache.forEach((p) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.textContent = p.name;
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closePlaylistMenu();
+      addSongToPlaylist(p.name, track);
+    });
+    menu.appendChild(item);
+  });
+  const newItem = document.createElement("button");
+  newItem.type = "button";
+  newItem.className = "pl-menu-new";
+  newItem.innerHTML = '<i class="bi bi-plus-lg"></i> New playlist';
+  newItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closePlaylistMenu();
+    pendingSong = track;
+    playlistModalMode = "song";
+    playlistModalTitle.innerHTML = '<i class="bi bi-plus-lg"></i> Save to Playlist';
+    playlistNameInput.value = "";
+    playlistModal.classList.add("open");
+    setTimeout(() => playlistNameInput.focus(), 50);
+  });
+  menu.appendChild(newItem);
+  document.body.appendChild(menu);
+  const rect = btn.getBoundingClientRect();
+  const mw = 180;
+  let left = rect.left;
+  if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+  menu.style.left = left + "px";
+  menu.style.top = rect.bottom + 4 + "px";
+  setTimeout(() => {
+    document.addEventListener("click", closePlaylistMenu, { once: true });
+  }, 0);
+}
+
+function closePlaylistMenu() {
+  document.querySelectorAll(".pl-menu").forEach((m) => m.remove());
 }
 
 function loadLiked() {
@@ -795,7 +1211,7 @@ function loadLiked() {
           thumbnail: "",
         };
         const card = createSongCard(entry, "local");
-        card.addEventListener("click", () => playLocal(entry));
+        card.addEventListener("click", () => playLocal(entry, songs));
         const addBtn = card.querySelector(".song-actions button");
         addBtn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -815,7 +1231,7 @@ function loadLiked() {
             duration: 0,
           };
           const card = createSongCard(item, "yt");
-          card.addEventListener("click", () => playTrack(item));
+          card.addEventListener("click", () => playTrack(item, entries));
           const addBtn = card.querySelector(".song-actions button");
           addBtn.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -961,6 +1377,91 @@ function showToast(msg, duration) {
   }, duration);
 }
 
+function loadDownloadedIds() {
+  fetch("/api/downloaded-ids")
+    .then((r) => r.json())
+    .then((data) => {
+      downloadedIds = new Set(data.ids || []);
+      markDownloadedCards();
+    })
+    .catch(() => {});
+}
+
+function markDownloadedCards() {
+  document.querySelectorAll(".song-card").forEach((c) => {
+    const id = c.dataset.videoId;
+    const badge = c.querySelector(".downloaded-badge");
+    const has = id && downloadedIds.has(id);
+    if (has && !badge) {
+      const el = document.createElement("span");
+      el.className = "downloaded-badge";
+      el.innerHTML = '<i class="bi bi-check-circle-fill"></i>';
+      el.title = "Downloaded";
+      c.appendChild(el);
+    } else if (!has && badge) {
+      badge.remove();
+    }
+  });
+}
+
+function setDownloadBtnState(downloaded) {
+  currentDownloaded = downloaded;
+  const icon = downloadBtn.querySelector("i");
+  downloadBtn.classList.toggle("downloaded", downloaded);
+  icon.className = downloaded ? "bi bi-check-circle" : "bi bi-download";
+  downloadBtn.title = downloaded ? "Downloaded - click to remove" : "Download";
+}
+
+function checkDownload(videoId) {
+  if (!videoId) {
+    setDownloadBtnState(false);
+    return;
+  }
+  if (downloadedIds.has(videoId)) {
+    setDownloadBtnState(true);
+    return;
+  }
+  fetch(`/api/is-downloaded?video_id=${encodeURIComponent(videoId)}`)
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.downloaded) {
+        downloadedIds.add(videoId);
+        setDownloadBtnState(true);
+        markDownloadedCards();
+      } else {
+        setDownloadBtnState(false);
+      }
+    })
+    .catch(() => {});
+}
+
+function deleteDownload() {
+  if (queueIndex < 0 || !queue[queueIndex]) return;
+  var track = queue[queueIndex];
+  var vid = track.video_id;
+  if (!vid) return;
+  if (!window.confirm("Remove this download from your library?")) return;
+  fetch("/api/delete-download", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_id: vid }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.success) {
+        downloadedIds.delete(vid);
+        setDownloadBtnState(false);
+        markDownloadedCards();
+        showToast("Removed download");
+      } else {
+        showToast("Failed: " + (data.error || "Not downloaded"));
+      }
+    })
+    .catch(function () {
+      showToast("Failed to remove download");
+    });
+}
+
 function downloadTrack() {
   if (queueIndex < 0 || !queue[queueIndex]) {
     showToast("No track selected");
@@ -970,6 +1471,10 @@ function downloadTrack() {
   var vid = track.video_id;
   if (!vid) {
     showToast("Cannot download local tracks");
+    return;
+  }
+  if (currentDownloaded) {
+    deleteDownload();
     return;
   }
   var saveDir = settings.downloadPath || "~/.flow/downloads";
@@ -984,6 +1489,9 @@ function downloadTrack() {
     .then(function (data) {
       downloadBtn.classList.remove("downloading");
       if (data.success) {
+        downloadedIds.add(vid);
+        setDownloadBtnState(true);
+        markDownloadedCards();
         showToast("Downloaded: " + (data.title || track.title));
       } else {
         showToast("Failed: " + (data.error || "Unknown error"));
@@ -1085,3 +1593,5 @@ loadSettings();
 setTab("search");
 scanLocal();
 loadLiked();
+loadDownloadedIds();
+loadPlaylists();

@@ -9,6 +9,7 @@ DEFAULT_SHORTCUTS = {
     "li": "list",
     "lk": "like",
     "dl": "download",
+    "dl-d": "delete",
     "rd": "radio",
     "sw": "switch",
     "hl": "help",
@@ -37,7 +38,7 @@ def save():
     SHORTCUTS_FILE.write_text(json.dumps(_shortcuts, indent=2))
 
 def resolve(cmd):
-    return _shortcuts.get(cmd, cmd)
+    return _shortcuts.get(cmd, DEFAULT_SHORTCUTS.get(cmd, cmd))
 
 def get_all():
     return _shortcuts

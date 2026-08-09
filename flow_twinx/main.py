@@ -299,6 +299,8 @@ def main():
         "svn-s",
         "like",
         "download",
+        "delete",
+        "dl-d",
         "switch",
         "help",
         "short",
