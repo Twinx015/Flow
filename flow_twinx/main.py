@@ -1,9 +1,12 @@
 import argparse
 import builtins
-import importlib
+import json
+import os
+import signal
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import psutil
@@ -58,6 +61,57 @@ def _run_web(port):
         WEB_PORT.unlink(missing_ok=True)
 
 
+def _web_alive(WEB_PID):
+    if not WEB_PID.exists():
+        return False
+    try:
+        return psutil.Process(int(WEB_PID.read_text().strip())).is_running()
+    except Exception:
+        return False
+
+
+def _send_web_command(port, command):
+    payload = json.dumps({"command": command}).encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/control",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):
+            return True
+    except Exception:
+        return False
+
+
+def _send_control(command, sig, label):
+    WEB_PID = Path.home() / ".flow/web.pid"
+    WEB_PORT = Path.home() / ".flow/web_port"
+
+    pid = config.read_pid()
+    if pid is not None:
+        try:
+            os.kill(pid, sig)
+            print(f"{P}{label} (VLC PID: {pid}){R}")
+            return
+        except ProcessLookupError:
+            config.clear_pid()
+
+    if _web_alive(WEB_PID):
+        port = None
+        if WEB_PORT.exists():
+            try:
+                port = int(WEB_PORT.read_text().strip())
+            except ValueError, OSError:
+                port = None
+        if port and _send_web_command(port, command):
+            print(f"{P}{label} (web player){R}")
+            return
+
+    print(f"{M}No VLC or web player running{R}")
+
+
 def _spinner(stop):
     chars = "|/-\\"
     i = 0
@@ -99,9 +153,20 @@ def main():
     parser = argparse.ArgumentParser(description="Flow Music Player")
     parser.add_argument("--play", nargs="+", help="play a song")
     parser.add_argument("--rd", nargs="+", help="play radio mix")
-    parser.add_argument("--stop", action="store_true", help="stop background VLC")
     parser.add_argument(
-        "--pause", action="store_true", help="toggle pause on background VLC"
+        "--stop",
+        action="store_true",
+        help="toggle stop/resume playback (VLC or web player)",
+    )
+    parser.add_argument(
+        "--next",
+        action="store_true",
+        help="play next track (VLC or web player)",
+    )
+    parser.add_argument(
+        "--previous",
+        action="store_true",
+        help="play previous track (VLC or web player)",
     )
     parser.add_argument(
         "--web", action="store_true", help="start web server with API and player UI"
@@ -160,8 +225,6 @@ def main():
     if getattr(args, "web_stop", False):
         if WEB_PID.exists():
             try:
-                import os
-
                 pid = int(WEB_PID.read_text().strip())
                 port = int(WEB_PORT.read_text().strip()) if WEB_PORT.exists() else 5000
                 kill_port(port)
@@ -175,9 +238,6 @@ def main():
         sys.exit(0)
 
     if getattr(args, "web", False) or getattr(args, "web_new", False):
-        import os
-        import signal
-
         WEB_PID.parent.mkdir(parents=True, exist_ok=True)
 
         if getattr(args, "web", False):
@@ -270,27 +330,16 @@ def main():
 
     shortcuts.load()
 
+    control_args = []
     if getattr(args, "stop", False):
-        if config.kill_stored():
-            print(f"{P}Stopped VLC{R}")
-        else:
-            print(f"{M}No background VLC running{R}")
-        sys.exit(0)
-
-    if getattr(args, "pause", False):
-        import os as _os
-        import signal as _signal
-
-        pid = config.read_pid()
-        if pid is not None:
-            try:
-                _os.kill(pid, _signal.SIGUSR1)
-                print(f"{P}Toggled pause on background VLC (PID: {pid}){R}")
-            except ProcessLookupError:
-                print(f"{M}No background VLC running{R}")
-                config.clear_pid()
-        else:
-            print(f"{M}No background VLC running{R}")
+        control_args.append(("stop", signal.SIGUSR1, "Toggled stop/resume"))
+    if getattr(args, "next", False):
+        control_args.append(("next", signal.SIGUSR2, "Skipped to next track"))
+    if getattr(args, "previous", False):
+        control_args.append(("previous", config.SIG_PREV, "Went to previous track"))
+    if control_args:
+        for command, sig, label in control_args:
+            _send_control(command, sig, label)
         sys.exit(0)
 
     if getattr(args, "play", None) is not None:

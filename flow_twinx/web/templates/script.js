@@ -77,6 +77,7 @@ let activeTab = "search";
 let localTracks = [];
 let currentTrackType = null;
 let downloadedIds = new Set();
+let librarySongs = {};
 let currentDownloaded = false;
 let playlistsCache = [];
 let currentPlaylistName = null;
@@ -350,7 +351,7 @@ function loadAndPlay(track) {
   setDisplayInfo(track);
   updateActiveCard(track);
   updateMiniPlayer(track);
-  updateBg(track.thumbnail);
+  updateBg(effectiveThumb(track));
   updateQueueBar();
   checkLiked(track.video_id);
   checkDownload(track.video_id);
@@ -358,7 +359,8 @@ function loadAndPlay(track) {
   setTimeout(() => reportNowPlaying(nowPlayingTrack, !audio.paused), 800);
 
   if (currentTrackType === "local") {
-    let encodedPath = encodeURI(track.path);
+    let filePath = track.path || track.url || "";
+    let encodedPath = encodeURI(filePath);
     let src = "/local" + (encodedPath.startsWith("/") ? encodedPath : "/" + encodedPath);
     track.thumbnail = track.thumbnail || "";
     track.channel = track.channel || track.album || "Local Music";
@@ -386,7 +388,16 @@ function loadAndPlay(track) {
 
 const artFrame = "/static/Frame%201.jpg";
 
-function applyArt(img, url) {
+function effectiveThumb(track) {
+  const id = track && track.video_id;
+  if (id && librarySongs[id] && librarySongs[id].thumbnail) {
+    return "/thumb/" + id;
+  }
+  return track ? track.thumbnail || "" : "";
+}
+
+function applyArt(img, url, track) {
+  url = track ? effectiveThumb(track) : url;
   if (!url || !url.trim()) {
     img.onerror = null;
     img.src = artFrame;
@@ -404,7 +415,8 @@ function applyArt(img, url) {
   img.src = url;
 }
 
-function artImgTag(url) {
+function artImgTag(url, track) {
+  url = track ? effectiveThumb(track) : url;
   if (!url || !url.trim()) {
     return `<img src="${artFrame}" alt="" loading="lazy">`;
   }
@@ -416,11 +428,11 @@ function artImgTag(url) {
 function setDisplayInfo(track) {
   trackTitle.textContent = track.title || "Unknown";
   trackArtist.textContent = track.channel || track.artist || "";
-  applyArt(albumArt, track.thumbnail);
+  applyArt(albumArt, track.thumbnail, track);
 }
 
 function updateMiniPlayer(track) {
-  applyArt(miniArt, track.thumbnail);
+  applyArt(miniArt, track.thumbnail, track);
   miniTitle.textContent = track.title || "Unknown";
   miniArtist.textContent = track.channel || track.artist || "";
 }
@@ -611,7 +623,7 @@ function searchYouTube(query) {
         });
         resultsContainer.appendChild(card);
       });
-      markDownloadedCards();
+      // markDownloadedCards();
     })
     .catch(() => {});
 }
@@ -640,7 +652,7 @@ function searchLocal(query) {
         });
         resultsContainer.appendChild(card);
       });
-      markDownloadedCards();
+      // markDownloadedCards();
     })
     .catch(() => {});
 }
@@ -654,7 +666,7 @@ function createSongCard(data, type) {
   const downloaded =
     data.video_id && downloadedIds.has(data.video_id);
   card.innerHTML = `
-    ${artImgTag(data.thumbnail)}
+    ${artImgTag(data.thumbnail, data)}
     <div class="song-info">
       <div class="song-title">${data.title || "Unknown"}</div>
       <div class="song-artist">${data.channel || data.artist || "Unknown"}</div>
@@ -664,7 +676,6 @@ function createSongCard(data, type) {
       <button title="Add to queue"><i class="bi bi-plus-lg"></i></button>
       <button class="pl-add-btn" title="Add to playlist"><i class="bi bi-music-note-list"></i></button>
     </div>
-    ${downloaded ? '<span class="downloaded-badge" title="Downloaded"><i class="bi bi-check-circle-fill"></i></span>' : ""}
   `;
   const plBtn = card.querySelector(".pl-add-btn");
   plBtn.addEventListener("click", (e) => {
@@ -739,7 +750,7 @@ function renderQueue() {
     const downloaded =
       item.video_id && downloadedIds.has(item.video_id);
     card.innerHTML = `
-      ${artImgTag(item.thumbnail)}
+      ${artImgTag(item.thumbnail, item)}
       <div class="song-info">
         <div class="song-title">${item.title}</div>
         <div class="song-artist">${item.channel || item.artist || "Unknown"}</div>
@@ -749,7 +760,6 @@ function renderQueue() {
         <button class="queue-remove" data-idx="${idx}" title="Remove"><i class="bi bi-x-lg"></i></button>
         <button class="pl-add-btn" title="Add to playlist"><i class="bi bi-music-note-list"></i></button>
       </div>
-      ${downloaded ? '<span class="downloaded-badge" title="Downloaded"><i class="bi bi-check-circle-fill"></i></span>' : ""}
     `;
     card.addEventListener("click", () => {
       addHistory();
@@ -775,7 +785,7 @@ function updateQueueBar() {
   if (queue.length > 0 && nextIdx < queue.length) {
     const nextTrack = queue[nextIdx];
     queueBarTitle.textContent = nextTrack.title || "Unknown";
-    applyArt(queueBarArt, nextTrack.thumbnail);
+    applyArt(queueBarArt, nextTrack.thumbnail, nextTrack);
   } else if (queue.length > 0) {
     queueBarTitle.textContent = "End of queue";
     applyArt(queueBarArt, "");
@@ -1409,32 +1419,37 @@ function showToast(msg, duration) {
   }, duration);
 }
 
-function loadDownloadedIds() {
-  fetch("/api/downloaded-ids")
+function loadLibrary() {
+  fetch("/api/library")
     .then((r) => r.json())
     .then((data) => {
-      downloadedIds = new Set(data.ids || []);
-      markDownloadedCards();
+      librarySongs = {};
+      downloadedIds = new Set();
+      (data.songs || []).forEach((s) => {
+        librarySongs[s.video_id] = s;
+        if (s.downloaded) downloadedIds.add(s.video_id);
+      });
+      // markDownloadedCards();
     })
     .catch(() => {});
 }
 
-function markDownloadedCards() {
-  document.querySelectorAll(".song-card").forEach((c) => {
-    const id = c.dataset.videoId;
-    const badge = c.querySelector(".downloaded-badge");
-    const has = id && downloadedIds.has(id);
-    if (has && !badge) {
-      const el = document.createElement("span");
-      el.className = "downloaded-badge";
-      el.innerHTML = '<i class="bi bi-check-circle-fill"></i>';
-      el.title = "Downloaded";
-      c.appendChild(el);
-    } else if (!has && badge) {
-      badge.remove();
-    }
-  });
-}
+// function markDownloadedCards() {
+//   document.querySelectorAll(".song-card").forEach((c) => {
+//     const id = c.dataset.videoId;
+//     const badge = c.querySelector(".downloaded-badge");
+//     const has = id && downloadedIds.has(id);
+//     if (has && !badge) {
+//       const el = document.createElement("span");
+//       el.className = "downloaded-badge";
+//       el.innerHTML = '<i class="bi bi-check-circle-fill"></i>';
+//       el.title = "Downloaded";
+//       c.appendChild(el);
+//     } else if (!has && badge) {
+//       badge.remove();
+//     }
+//   });
+// }
 
 function setDownloadBtnState(downloaded) {
   currentDownloaded = downloaded;
@@ -1453,13 +1468,18 @@ function checkDownload(videoId) {
     setDownloadBtnState(true);
     return;
   }
-  fetch(`/api/is-downloaded?video_id=${encodeURIComponent(videoId)}`)
+  fetch(`/api/library`)
     .then((r) => r.json())
     .then((data) => {
-      if (data.downloaded) {
-        downloadedIds.add(videoId);
+      librarySongs = {};
+      downloadedIds = new Set();
+      (data.songs || []).forEach((s) => {
+        librarySongs[s.video_id] = s;
+        if (s.downloaded) downloadedIds.add(s.video_id);
+      });
+      if (downloadedIds.has(videoId)) {
         setDownloadBtnState(true);
-        markDownloadedCards();
+        // markDownloadedCards();
       } else {
         setDownloadBtnState(false);
       }
@@ -1482,8 +1502,12 @@ function deleteDownload() {
     .then(function (data) {
       if (data.success) {
         downloadedIds.delete(vid);
+        if (librarySongs[vid]) {
+          librarySongs[vid].downloaded = false;
+          librarySongs[vid].thumbnail = "";
+        }
         setDownloadBtnState(false);
-        markDownloadedCards();
+        // markDownloadedCards();
         showToast("Removed download");
       } else {
         showToast("Failed: " + (data.error || "Not downloaded"));
@@ -1522,8 +1546,20 @@ function downloadTrack() {
       downloadBtn.classList.remove("downloading");
       if (data.success) {
         downloadedIds.add(vid);
+        if (librarySongs[vid]) {
+          librarySongs[vid].downloaded = true;
+          if (data.thumbnail) librarySongs[vid].thumbnail = data.thumbnail;
+        } else {
+          librarySongs[vid] = {
+            video_id: vid,
+            title: data.title || track.title || "",
+            liked: false,
+            downloaded: true,
+            thumbnail: data.thumbnail || "",
+          };
+        }
         setDownloadBtnState(true);
-        markDownloadedCards();
+        // markDownloadedCards();
         showToast("Downloaded: " + (data.title || track.title));
       } else {
         showToast("Failed: " + (data.error || "Unknown error"));
@@ -1545,10 +1581,25 @@ function checkLiked(videoId) {
     likeBtn.querySelector("i").className = "bi bi-heart";
     return;
   }
-  fetch(`/api/is-liked?video_id=${encodeURIComponent(videoId)}`)
+  const entry = librarySongs[videoId];
+  if (entry) {
+    currentLiked = entry.liked || false;
+    likeBtn.querySelector("i").className = currentLiked
+      ? "bi bi-heart-fill"
+      : "bi bi-heart";
+    return;
+  }
+  fetch(`/api/library`)
     .then((r) => r.json())
     .then((data) => {
-      currentLiked = data.liked || false;
+      librarySongs = {};
+      downloadedIds = new Set();
+      (data.songs || []).forEach((s) => {
+        librarySongs[s.video_id] = s;
+        if (s.downloaded) downloadedIds.add(s.video_id);
+      });
+      const e = librarySongs[videoId];
+      currentLiked = (e && e.liked) || false;
       likeBtn.querySelector("i").className = currentLiked
         ? "bi bi-heart-fill"
         : "bi bi-heart";
@@ -1567,7 +1618,12 @@ function toggleLike() {
   fetch("/api/like", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video_id: vid, title: track.title || "Unknown" }),
+    body: JSON.stringify({
+      video_id: vid,
+      title: track.title || "Unknown",
+      save_dir: settings.downloadPath || "~/.flow/downloads",
+      format: settings.format,
+    }),
   })
     .then((r) => r.json())
     .then((data) => {
@@ -1575,8 +1631,46 @@ function toggleLike() {
       likeBtn.querySelector("i").className = currentLiked
         ? "bi bi-heart-fill"
         : "bi bi-heart";
-      showToast(currentLiked ? "Liked" : "Removed from liked");
+      if (librarySongs[vid]) librarySongs[vid].liked = currentLiked;
+      else librarySongs[vid] = { video_id: vid, liked: currentLiked, downloaded: false, thumbnail: "" };
+      if (currentLiked) {
+        showToast("Liked - downloading...");
+        pollLikeDownload(vid);
+      } else {
+        showToast("Removed from liked");
+      }
     });
+}
+
+function pollLikeDownload(vid) {
+  let tries = 0;
+  const iv = setInterval(() => {
+    tries++;
+    if (tries > 60) {
+      clearInterval(iv);
+      return;
+    }
+    fetch("/api/library")
+      .then((r) => r.json())
+      .then((data) => {
+        (data.songs || []).forEach((s) => {
+          librarySongs[s.video_id] = s;
+          if (s.downloaded) downloadedIds.add(s.video_id);
+        });
+        if (librarySongs[vid] && librarySongs[vid].downloaded) {
+          clearInterval(iv);
+          setDownloadBtnState(true);
+          // markDownloadedCards();
+          if (queue[queueIndex] && queue[queueIndex].video_id === vid) {
+            updateMiniPlayer(queue[queueIndex]);
+            updateBg(effectiveThumb(queue[queueIndex]));
+            applyArt(albumArt, queue[queueIndex].thumbnail, queue[queueIndex]);
+          }
+          showToast("Liked - downloaded");
+        }
+      })
+      .catch(() => {});
+  }, 2000);
 }
 
 likeBtn.addEventListener("click", toggleLike);
@@ -1621,9 +1715,22 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+function pollControls() {
+  fetch("/api/control/poll")
+    .then((r) => r.json())
+    .then((data) => {
+      const cmd = data.command;
+      if (cmd === "next") nextTrack();
+      else if (cmd === "previous") prevTrack();
+      else if (cmd === "stop" && audio.src) togglePlay();
+    })
+    .catch(() => {});
+}
+
 loadSettings();
 setTab("search");
 scanLocal();
 loadLiked();
-loadDownloadedIds();
+loadLibrary();
 loadPlaylists();
+setInterval(pollControls, 1000);

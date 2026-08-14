@@ -35,6 +35,9 @@ _radio_active = False
 _stop_reader = threading.Event()
 _reader_thread = None
 
+_next_req = False
+_prev_req = False
+
 
 def _sigusr1_toggle(sig, frame):
     global _paused
@@ -43,10 +46,31 @@ def _sigusr1_toggle(sig, frame):
         _player.pause()
 
 
+def _sigusr2_next(sig, frame):
+    global _next_req
+    _next_req = True
+    if _player:
+        _player.stop()
+
+
+def _sigusr3_prev(sig, frame):
+    global _prev_req
+    _prev_req = True
+    if _player:
+        _player.stop()
+
+
+def setup_nav_signals():
+    signal.signal(signal.SIGUSR1, _sigusr1_toggle)
+    signal.signal(signal.SIGUSR2, _sigusr2_next)
+    signal.signal(config.SIG_PREV, _sigusr3_prev)
+
+
 def _setup_pause_input():
     global _original_term
     if _radio_active:
         signal.signal(signal.SIGUSR1, _sigusr1_toggle)
+        setup_nav_signals()
         return
     fd = sys.stdin.fileno()
     try:
@@ -62,7 +86,7 @@ def _setup_pause_input():
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
     signal.signal(signal.SIGUSR1, _sigusr1_toggle)
     signal.signal(signal.SIGTSTP, signal.SIG_IGN)
-    global _reader_thread, _stop_reader
+    setup_nav_signals()
     _stop_reader.clear()
     _reader_thread = threading.Thread(target=_input_reader, daemon=True)
     _reader_thread.start()
@@ -114,7 +138,7 @@ def _flags_str(args):
     return "  ".join(parts)
 
 
-def _display_loop(player, duration=0, stop_check=None):
+def _display_loop(player, stop_check=None):
     global _paused
     display = config.Display
     if display == "none":
@@ -123,11 +147,12 @@ def _display_loop(player, duration=0, stop_check=None):
     if display == "bars":
         visualizer.start()
 
-    start = time.time()
     paused_printed = False
     try:
         while player.get_state() not in (vlc.State.Ended, vlc.State.Error):
             if stop_check and stop_check():
+                break
+            if _next_req or _prev_req:
                 break
             if _paused:
                 if not paused_printed:
@@ -157,8 +182,10 @@ def _display_loop(player, duration=0, stop_check=None):
 
 
 def play_file(filepath, title, args=None, flags=None):
-    global _player, _paused
+    global _player, _paused, _next_req, _prev_req
     _paused = False
+    _next_req = False
+    _prev_req = False
     devnull = os.open(os.devnull, os.O_RDWR)
     old_stderr = os.dup(2)
     os.dup2(devnull, 2)
@@ -199,7 +226,7 @@ def play_file(filepath, title, args=None, flags=None):
             return False
 
         try:
-            _display_loop(_player, duration=duration, stop_check=stop_check)
+            _display_loop(_player, stop_check=stop_check)
         except KeyboardInterrupt:
             _player.stop()
             sys.stdout.write("\n")

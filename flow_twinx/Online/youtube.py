@@ -3,7 +3,7 @@ import pathlib
 
 import yt_dlp
 
-from .. import downloads
+from .. import library
 from ..imports import config
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ ydl_opts = {
 ydl_opts_dwn = {
     **BASE_OPTS,
     "skip_download": False,
-    "outtmpl": "downloads/%(title).50B.%(ext)s",
+    "outtmpl": "downloads/%(id)s.%(ext)s",
 }
 
 ydl_opts_radio = {
@@ -92,7 +92,7 @@ def search(query, limit=3):
 
 
 def download_url(url, outdir, fmt=None):
-    opts = {**ydl_opts_dwn, "outtmpl": f"{outdir}/%(title).50B.%(ext)s"}
+    opts = {**ydl_opts_dwn, "outtmpl": f"{outdir}/%(id)s.%(ext)s"}
     if fmt and fmt != "webm":
         opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
     try:
@@ -115,7 +115,11 @@ def download_url(url, outdir, fmt=None):
             "filesize": info.get("filesize") or info.get("filesize_approx"),
         },
     )
-    downloads.track(info.get("id"), filename, info.get("title", "Unknown"))
+    library.track_download(info.get("id"), filename, info.get("title", "Unknown"))
+    try:
+        library.download_thumbnail(info.get("id"), info.get("thumbnail"))
+    except Exception:
+        pass
     return filename
 
 

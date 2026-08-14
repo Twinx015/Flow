@@ -30,7 +30,7 @@ ONLINE_HELP = {
     "like": [
         f"{_T}> like{_R}",
         f"{_G}  Like/unlike the currently playing song.{_R}",
-        f"{_G}  Liked songs are saved to {_M}~/.flow/liked.json{_R}",
+        f"{_G}  Liked songs are saved to {_M}~/.flow/library.json{_R}",
         f"{_G}  Use {_M}'play liked'{_G} to play all liked songs.{_R}",
     ],
     "download": [
@@ -143,7 +143,7 @@ ONLINE_HELP = {
     ],
     "stop": [
         f"{_T}> flow --stop{_R}",
-        f"{_G}  Stop all background VLC processes.{_R}",
+        f"{_G}  Toggle stop/resume on the background VLC or web player.{_R}",
         f"{_G}  Use from shell: {_M}flow --stop{_R}",
     ],
 }
@@ -248,7 +248,7 @@ OFFLINE_HELP = {
     ],
     "stop": [
         f"{_T}> flow --stop{_R}",
-        f"{_G}  Stop all background VLC processes.{_R}",
+        f"{_G}  Toggle stop/resume on the background VLC or web player.{_R}",
         f"{_G}  Use from shell: {_B}flow --stop{_R}",
     ],
 }

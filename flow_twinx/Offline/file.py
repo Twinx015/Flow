@@ -2,6 +2,7 @@ import pathlib
 import shutil
 
 from flow_twinx import config
+from flow_twinx import library
 
 AUDIO_EXTENSIONS = {
     ".mp3",
@@ -82,13 +83,19 @@ def unlike_song(song_path: pathlib.Path) -> bool:
     return False
 
 
+def display_name(song_path: pathlib.Path) -> str:
+    return library.title_for_stem(song_path.stem)
+
+
 def find_songs(query: str) -> list[pathlib.Path]:
     q = query.lower()
-    return [s for s in get_songs() if q in s.stem.lower()]
+    return [
+        s for s in get_songs() if q in s.stem.lower() or q in display_name(s).lower()
+    ]
 
 
 def get_song_names() -> list[str]:
-    return sorted(set(s.stem for s in get_songs()))
+    return sorted(set(display_name(s) for s in get_songs()))
 
 
 def get_album_names() -> list[str]:

@@ -68,6 +68,7 @@ def show():
     status_val = "playing" if playing else "not playing"
     status_col = Cyan if playing else Muted
     web_val = f"{port} active" if web else "not active"
+    stat = "currently playing" if playing else "last played"
     web_col = Cyan if web else Muted
 
     sep = f"{Grey}{'─' * 44}{Reset}"
@@ -75,7 +76,7 @@ def show():
     print(sep)
     print(f"{Primary}│{Reset}  {'status':<17}: {status_col}{status_val}{Reset}")
     print(f"{Primary}│{Reset}  {'web_mode':<17}: {web_col}{web_val}{Reset}")
-    print(f"{Primary}│{Reset}  {'currently playing':<17}: {White}{title}{Reset}")
+    print(f"{Primary}│{Reset}  {stat:<17}: {White}{title}{Reset}")
     print(f"{Primary}│{Reset}  {'total duration':<17}: {White}{dur_str}{Reset}")
     print(sep)
     print(f"{Primary}└─{Reset}\n")

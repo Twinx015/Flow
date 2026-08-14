@@ -1,4 +1,3 @@
-import sys
 import numpy as np
 import sounddevice as sd
 from .imports import config

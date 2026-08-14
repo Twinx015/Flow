@@ -34,11 +34,21 @@ def _fork_bg(label):
         config.save_pid(pid)
         i(f"{label} in background (PID: {pid})")
         return False
+    player.setup_nav_signals()
     devnull = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull, 0)
     os.dup2(devnull, 1)
     os.dup2(devnull, 2)
     return True
+
+
+def _nav_delta():
+    if player._prev_req:
+        player._prev_req = False
+        player._next_req = False
+        return -1
+    player._next_req = False
+    return 1
 
 
 try:
@@ -188,7 +198,7 @@ def play(extra: list[str], args):
             _last_results = results
             m("Multiple matches:")
             for i, p in enumerate(results, 1):
-                m(f"  {i}. {p.stem}")
+                m(f"  {i}. {lib.display_name(p)}")
             return
 
     _last_played = song_path
@@ -201,14 +211,14 @@ def play(extra: list[str], args):
     if repeat:
         try:
             while True:
-                player.play_file(song_path, song_path.stem, args)
+                player.play_file(song_path, lib.display_name(song_path), args)
                 iteration += 1
                 if repeat_count > 0 and iteration >= repeat_count:
                     break
         except KeyboardInterrupt:
             pass
     else:
-        player.play_file(song_path, song_path.stem, args)
+        player.play_file(song_path, lib.display_name(song_path), args)
 
 
 def _play_liked(args):
@@ -228,9 +238,12 @@ def _play_liked(args):
             return
     try:
         while True:
-            for song in songs:
+            idx = 0
+            while 0 <= idx < len(songs):
+                song = songs[idx]
                 _last_played = song
-                player.play_file(song, song.stem, args)
+                player.play_file(song, lib.display_name(song), args)
+                idx += _nav_delta()
             if not repeat:
                 break
             iteration += 1
@@ -257,9 +270,12 @@ def _play_all(args):
             return
     try:
         while True:
-            for song in songs:
+            idx = 0
+            while 0 <= idx < len(songs):
+                song = songs[idx]
                 _last_played = song
-                player.play_file(song, song.stem, args)
+                player.play_file(song, lib.display_name(song), args)
+                idx += _nav_delta()
             if not repeat:
                 break
             iteration += 1
@@ -286,9 +302,12 @@ def _play_album(album: str, args):
             return
     try:
         while True:
-            for song in tracks:
+            idx = 0
+            while 0 <= idx < len(tracks):
+                song = tracks[idx]
                 _last_played = song
-                player.play_file(song, song.stem, args)
+                player.play_file(song, lib.display_name(song), args)
+                idx += _nav_delta()
             if not repeat:
                 break
             iteration += 1
@@ -307,16 +326,17 @@ def like_track():
     liked = lib.get_liked_songs()
     if song_path in liked:
         lib.unlike_song(song_path)
-        i(f"Unliked: {song_path.stem}")
+        i(f"Unliked: {lib.display_name(song_path)}")
     else:
         dest = lib.like_song(song_path)
         if dest:
-            i(f"Liked: {song_path.stem}")
+            i(f"Liked: {lib.display_name(song_path)}")
         else:
-            m(f"{song_path.stem} is already liked")
+            m(f"{lib.display_name(song_path)} is already liked")
 
 
 def playlist_cmd(extra, args=None):
+    global _last_played
     if not extra:
         names = playlist.list_all()
         if not names:
@@ -362,16 +382,16 @@ def playlist_cmd(extra, args=None):
                 e("Index out of range")
                 return
             song_path = _last_results[idx]
-            playlist.add_song(name, song_path.stem, "", str(song_path))
-            i(f"Added: {song_path.stem} to {name}")
+            playlist.add_song(name, lib.display_name(song_path), "", str(song_path))
+            i(f"Added: {lib.display_name(song_path)} to {name}")
         else:
             results = lib.find_songs(target)
             if not results:
                 e(f"No songs found matching '{target}'")
                 return
             song_path = results[0]
-            playlist.add_song(name, song_path.stem, "", str(song_path))
-            i(f"Added: {song_path.stem} to {name}")
+            playlist.add_song(name, lib.display_name(song_path), "", str(song_path))
+            i(f"Added: {lib.display_name(song_path)} to {name}")
 
     elif subcmd == "remove":
         if len(extra) < 3:
@@ -421,13 +441,17 @@ def playlist_cmd(extra, args=None):
                 return
         try:
             while True:
-                for s in tracks:
+                idx = 0
+                while 0 <= idx < len(tracks):
+                    s = tracks[idx]
                     fpath = pathlib.Path(s.get("url", ""))
                     if not fpath.exists():
                         m(f"    Skipping {s.get('title', 'Unknown')} (file not found)")
+                        idx += 1
                         continue
                     _last_played = fpath
                     player.play_file(fpath, s.get("title", "Unknown"), args)
+                    idx += _nav_delta()
                 if not repeat:
                     break
                 iteration += 1
@@ -458,7 +482,7 @@ def search(query: str):
         return
     _last_results = results
     for i, p in enumerate(results, 1):
-        m(f"  {i}. {p.stem}")
+        m(f"  {i}. {lib.display_name(p)}")
 
 
 def list_library():
@@ -471,7 +495,7 @@ def list_library():
         _last_results = songs
         i("\nSongs:")
         for idx, p in enumerate(songs, 1):
-            m(f"  {idx}. {p.stem}")
+            m(f"  {idx}. {lib.display_name(p)}")
     if albums:
         i("\nAlbums:")
         for a in albums:
@@ -479,7 +503,7 @@ def list_library():
     if liked:
         i("\nLiked Songs:")
         for p in liked:
-            m(f"  {p.stem}")
+            m(f"  {lib.display_name(p)}")
     if not songs and not albums and not liked:
         e("No music in library")
 
@@ -558,12 +582,15 @@ def radio(extra, args):
     i(f"\n[Radio] Playing {len(tracks)} songs (Ctrl+C next, Ctrl+Q quit)")
     try:
         while True:
-            for song in tracks:
+            idx = 0
+            while 0 <= idx < len(tracks) and not _radio_quit:
                 _radio_skip = False
+                song = tracks[idx]
                 _last_played = song
-                player.play_file(song, song.stem, args, flags=flags)
+                player.play_file(song, lib.display_name(song), args, flags=flags)
                 if _radio_quit:
                     break
+                idx += _nav_delta()
             if _radio_quit:
                 break
     except KeyboardInterrupt:

@@ -494,7 +494,6 @@ body {
         background-image 0.5s steps(4),
         filter 0.3s steps(3);
     z-index: 0;
-    image-rendering: pixelated;
 }
 
 .player-bg::after {
@@ -531,8 +530,8 @@ body {
 
 .pixel-frame {
     position: relative;
-    width: 280px;
-    height: 280px;
+    width: 320px;
+    height: 320px;
     margin: 0 auto 16px;
     animation: pixelFramePulse 4s steps(4) infinite;
 }
@@ -2014,20 +2013,18 @@ body.playing .pixel-wave span:nth-child(16) {
     transform: rotate(90deg);
 }
 
-.downloaded-badge {
+/*.downloaded-badge {
     position: absolute;
     top: 6px;
     right: 6px;
     color: #22c55e;
     font-size: 18px;
-    background: var(--bg3);
-    border: 1px solid var(--surface2);
-    border-radius: 4px;
+    background: transparent;
+    border: none;
     padding: 1px 3px;
     line-height: 1;
     pointer-events: none;
-    box-shadow: 1px 1px 0 0 var(--shadow);
-}
+}*/
 
 .setting-group input[type="text"] {
     width: 100%;

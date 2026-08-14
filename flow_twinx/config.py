@@ -3,8 +3,13 @@ import os
 import pathlib
 import re
 import shutil
+import signal as _signal
 
 CONFIG_FILE = pathlib.Path.home() / ".flow/config.json"
+
+SIG_STOP = _signal.SIGUSR1
+SIG_NEXT = _signal.SIGUSR2
+SIG_PREV = _signal.SIGRTMIN + 2
 
 
 def merge_flags(extra: list[str], args) -> tuple[list[str], object]:
@@ -207,7 +212,7 @@ def export_flow():
     print(f"Exported {included} files to {dest} ({size_kb} KB)")
 
 
-FILLER_WORDS = {
+_FILLER_WORDS = {
     "official",
     "officials",
     "video",
@@ -240,9 +245,29 @@ FILLER_WORDS = {
     "explicit",
     "clip",
     "old",
-    "#video",
-    "#song"
 }
+
+IGNORE_FILE = pathlib.Path.home() / ".flow/ignore.txt"
+
+
+def _load_filler_words():
+    if not IGNORE_FILE.exists():
+        IGNORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            "# Add one word or phrase per line. Words listed here are"
+            " removed from song titles.\n"
+            "# Lines starting with '#' are ignored.\n"
+        )
+        IGNORE_FILE.write_text(header + "\n".join(sorted(_FILLER_WORDS)) + "\n")
+    words = set()
+    for line in IGNORE_FILE.read_text().splitlines():
+        word = line.strip().lower()
+        if word and not word.startswith("#"):
+            words.add(word)
+    return words
+
+
+FILLER_WORDS = _load_filler_words()
 
 
 def _truncate_title(title):
@@ -350,8 +375,6 @@ except PackageNotFoundError:
 
 Mode = "Online"
 
-liked_music = pathlib.Path.home() / ".flow/liked.json"
-
 MAX_RESULTS_RADIO = 35
 MAX_SEARCH_RESULTS = 5
 
@@ -403,7 +426,6 @@ def cmd_config(extra: list[str], args=None):
         BarSpacing, \
         Sensitivity, \
         DEV_MODE, \
-        FFMPEG, \
         FORMAT, \
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO

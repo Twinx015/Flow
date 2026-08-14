@@ -1,6 +1,5 @@
 import errno
 import fcntl
-import json
 import os
 import pathlib
 import random
@@ -10,7 +9,7 @@ import termios
 import threading
 import time
 
-from .. import downloads, help_detail, playlist, shortcuts
+from .. import help_detail, library, playlist, shortcuts
 from ..imports import config, merge_flags
 from ..Offline import player as off_player
 from . import player, savan, youtube
@@ -52,11 +51,25 @@ def _fork_bg(label):
         config.save_pid(pid)
         i(f"{label} in background (PID: {pid})")
         return False
+    player.setup_nav_signals()
     devnull = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull, 0)
     os.dup2(devnull, 1)
     os.dup2(devnull, 2)
     return True
+
+
+def _nav_delta():
+    prev = player._prev_req or off_player._prev_req
+    if prev:
+        player._prev_req = False
+        off_player._prev_req = False
+        player._next_req = False
+        off_player._next_req = False
+        return -1
+    player._next_req = False
+    off_player._next_req = False
+    return 1
 
 
 COMMANDS = {
@@ -210,13 +223,16 @@ def play(extra: list[str], args):
         iteration = 0
         try:
             while True:
-                for entry, title, _ in results:
+                idx = 0
+                while 0 <= idx < len(results):
+                    entry, title, _ = results[idx]
                     entry = _resolve_entry(entry)
                     _last_played = (entry, title)
                     if getattr(args, "bg", False):
                         if not _fork_bg("Now playing"):
                             return
                     player.play_entry(entry, title, args)
+                    idx += _nav_delta()
                 if not repeat:
                     break
                 iteration += 1
@@ -247,17 +263,12 @@ def _resolve_entry(entry):
 
 
 def _play_liked(args):
-    if not config.liked_music.exists():
+    global _last_played
+    liked = library.get_liked_entries()
+    if not liked:
         e("     No liked songs yet")
         return
-    try:
-        songs = json.loads(config.liked_music.read_text())
-    except (json.JSONDecodeError, OSError):
-        songs = []
-    if not songs:
-        e("     No liked songs yet")
-        return
-    tracks = [(s["title"], s["url"]) for s in songs if "title" in s and "url" in s]
+    tracks = [(s["title"], "") for s in liked if s.get("title")]
     if not tracks:
         e("     No liked songs yet")
         return
@@ -268,15 +279,19 @@ def _play_liked(args):
     iteration = 0
     try:
         while True:
-            for title, url in tracks:
+            idx = 0
+            while 0 <= idx < len(tracks):
+                title, url = tracks[idx]
                 _do_search(title)
                 if not _last_results:
                     m(f"    Skipping {_truncate_title(title)} (not found)")
+                    idx += 1
                     continue
                 entry, _, _ = _last_results[0]
                 entry = _resolve_entry(entry)
                 _last_played = (entry, title)
                 player.play_entry(entry, title, args)
+                idx += _nav_delta()
             if not repeat:
                 break
             iteration += 1
@@ -348,16 +363,20 @@ def savan_cmd(extra, args):
         iteration = 0
         try:
             while True:
-                for entry, title, dur in results:
+                idx = 0
+                while 0 <= idx < len(results):
+                    entry, title, dur = results[idx]
                     url = savan.best_url(entry)
                     if not url:
                         e(f"No playable URL for {_truncate_title(title)}, skipping")
+                        idx += 1
                         continue
                     _last_played = (entry, title)
                     if getattr(args, "bg", False):
                         if not _fork_bg("Now playing"):
                             return
                     player.play_url(url, title, args, dur)
+                    idx += _nav_delta()
                 if not repeat:
                     break
                 iteration += 1
@@ -419,22 +438,42 @@ def like_track():
             "original_url": entry.get("original_url"),
         },
     )
-    config.liked_music.parent.mkdir(parents=True, exist_ok=True)
-    songs = []
-    if config.liked_music.exists():
-        try:
-            songs = json.loads(config.liked_music.read_text())
-        except (json.JSONDecodeError, OSError):
-            songs = []
-    match = next((s for s in songs if s.get("url") == url), None)
-    if match:
-        songs.remove(match)
-        config.liked_music.write_text(json.dumps(songs, indent=2))
+    video_id = library.key_for(url, entry.get("id"))
+    if library.is_liked(video_id):
+        library.mark_unliked(video_id)
         i(f"    Unliked: {_truncate_title(title)}")
     else:
-        songs.append({"title": title, "url": url})
-        config.liked_music.write_text(json.dumps(songs, indent=2))
+        library.mark_liked(video_id, title)
         i(f"    Liked: {_truncate_title(title)}")
+        if entry.get("id"):
+            try:
+                library.download_thumbnail(video_id, entry.get("thumbnail"))
+            except Exception:
+                pass
+            if not library.get_download_path(video_id):
+                _like_autodownload(url, video_id, title)
+
+
+def _like_autodownload(url: str, video_id: str, title: str):
+    fmt = config.FORMAT
+    if fmt != "webm" and not config.FFMPEG:
+        fmt = "webm"
+    try:
+        stop = False
+        t = threading.Thread(
+            target=_spinner,
+            args=(lambda: stop, f"Downloading liked song: {_truncate_title(title)}"),
+            daemon=True,
+        )
+        t.start()
+        try:
+            youtube.download_url(url, config.DOWNLOAD_DIR, fmt=fmt)
+        finally:
+            stop = True
+            t.join()
+        i(f"    Downloaded: {_truncate_title(title)}")
+    except Exception as exc:
+        e(f"    Auto-download failed: {exc}")
 
 
 def search(query: str):
@@ -626,8 +665,6 @@ def radio(extra, args):
                     },
                 )
                 entry = youtube.get_entry(url)
-                short = _truncate_title(title)
-                mins, secs = divmod(int(dur), 60)
 
                 if idx + 1 < len(_radio_tracks):
                     n_title, n_vid, n_dur = _radio_tracks[idx + 1]
@@ -644,7 +681,7 @@ def radio(extra, args):
                     off_player.play_file(filepath, title, args)
                 else:
                     player.play_entry(entry, title, args, flags=flags)
-                idx += 1
+                idx += _nav_delta()
             if not repeat or _radio_quit:
                 break
             iteration += 1
@@ -723,7 +760,7 @@ def download(extra: list[str]):
 
     vid = entry.get("id") or ""
     if vid:
-        existing = downloads.get_download_path(vid)
+        existing = library.get_download_path(vid)
         if existing:
             existing_ext = pathlib.Path(existing).suffix.lstrip(".").lower()
             if existing_ext == fmt:
@@ -737,7 +774,7 @@ def download(extra: list[str]):
     t = threading.Thread(target=_spinner, args=(lambda: stop, label), daemon=True)
     t.start()
     try:
-        filepath = youtube.download_url(url, config.DOWNLOAD_DIR, fmt=fmt)
+        youtube.download_url(url, config.DOWNLOAD_DIR, fmt=fmt)
     finally:
         stop = True
         t.join()
@@ -774,11 +811,12 @@ def delete_download(extra: list[str]):
         entry, title, _ = _last_results[idx]
         vid = entry.get("id")
     else:
-        index = downloads.load_index()
+        index = library.load()
         matches = [
             (_vid, info.get("path"), info.get("title", ""))
             for _vid, info in index.items()
             if arg.lower() in info.get("title", "").lower()
+            or arg.lower() in (_vid or "").lower()
         ]
         if len(matches) == 1:
             vid, _, title = matches[0]
@@ -793,7 +831,10 @@ def delete_download(extra: list[str]):
                 for f in sorted(config.DOWNLOAD_DIR.rglob("*"))
                 if f.is_file()
                 and f.suffix.lower() in _AUDIO_EXTS
-                and arg.lower() in f.stem.lower()
+                and (
+                    arg.lower() in f.stem.lower()
+                    or arg.lower() in library.title_for_stem(f.stem).lower()
+                )
             ]
             if not candidates:
                 e(f"     No downloaded song matching '{arg}'")
@@ -801,17 +842,17 @@ def delete_download(extra: list[str]):
             if len(candidates) > 1:
                 m("    Multiple matches:")
                 for i, f in enumerate(candidates, 1):
-                    m(f"      {i}. {f.stem}")
+                    m(f"      {i}. {library.title_for_stem(f.stem)}")
                 return
             path = str(candidates[0])
             vid = _find_vid_by_path(index, path)
-            title = candidates[0].stem
+            title = library.title_for_stem(candidates[0].stem)
 
     if not vid:
         e("     No video id found for this song")
         return
 
-    path = downloads.get_download_path(vid)
+    path = library.get_download_path(vid)
     if not path:
         e("     Song not found in downloads")
         return
@@ -824,7 +865,7 @@ def delete_download(extra: list[str]):
         m("    Cancelled")
         return
 
-    if downloads.delete(vid):
+    if library.delete(vid):
         i(f"    Deleted: {_truncate_title(title or pathlib.Path(path).stem)}")
     else:
         e("     Nothing to delete")
@@ -835,6 +876,7 @@ def switch_mode():
 
 
 def playlist_cmd(extra, args):
+    global _last_played
     if not extra:
         names = playlist.list_all()
         if not names:
@@ -952,7 +994,9 @@ def playlist_cmd(extra, args):
                 return
         try:
             while True:
-                for idx, s in enumerate(tracks):
+                idx = 0
+                while 0 <= idx < len(tracks):
+                    s = tracks[idx]
                     vid = s.get("video_id", "")
                     title = s.get("title", "Unknown")
                     url = s.get("url") or f"https://www.youtube.com/watch?v={vid}"
@@ -961,9 +1005,11 @@ def playlist_cmd(extra, args):
                     entry = youtube.get_entry(url)
                     if not entry:
                         m(f"    Skipping {short} (unavailable)")
+                        idx += 1
                         continue
                     _last_played = (entry, title)
                     player.play_entry(entry, title, args)
+                    idx += _nav_delta()
                 if not repeat:
                     break
                 iteration += 1

@@ -9,7 +9,7 @@ A terminal-based music player with online streaming and offline library modes.
 - **Offline mode** — Play local audio files with album support, search, and a liked-songs collection
 - **Download** — Save tracks from YouTube to your local library with the `-d` flag
 - **Repeat & shuffle** — Loop tracks n times or play in random order
-- **Like/unlike** — Toggle favorites on/off, stored in `~/.flow/liked.json`
+- **Like/unlike** — Toggle favorites on/off, stored in `~/.flow/library.json`
 - **Playlist play** — Create playlists and play them with `playlist play <name>`
 - **Tab completion** — Auto-complete commands and song names in offline mode
 - **Colored TUI** — Cyan theme for online, magenta for offline, with borders and banners
@@ -132,39 +132,11 @@ Usage: `config <target> <value>`
 
 ## Configuration
 
-- Downloads and library are stored in `~/.flow/downloads/`
-- Liked songs (online) are saved to `~/.flow/liked.json`
-- Liked songs (offline) are copied to `~/.flow/downloads/liked songs/`
+- Downloads are stored in `~/.flow/downloads/` (named by video id, e.g. `TucWbkH5WX0.opus`)
+- All per-song data (liked/downloaded/title/paths) lives in the single file `~/.flow/library.json`, keyed by video id
+- Thumbnails are downloaded on like/download to `~/.flow/downloads/.cache/<video_id>.jpg`
 - User shortcuts are stored in `~/.flow/shortcuts.json`
 - Config file: `~/.flow/config.json`
-
-## Project Structure
-
-```
-flow/
-├── flow_twinx/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── imports.py
-│   ├── main.py
-│   ├── ping.py
-│   ├── tui.py
-│   ├── lyrics.py               # Synced lyrics fetching
-│   ├── visualizer.py           # Audio-reactive bars
-│   ├── Online/
-│   │   ├── __init__.py
-│   │   ├── commands.py
-│   │   ├── player.py
-│   │   └── youtube.py
-│   └── Offline/
-│       ├── __init__.py
-│       ├── commands.py
-│       ├── file.py
-│       ├── player.py
-│       └── youtube.py
-├── pyproject.toml
-└── README.md
-```
 
 ## License
 

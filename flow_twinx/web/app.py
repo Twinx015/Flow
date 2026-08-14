@@ -1,13 +1,14 @@
 import json
 import logging
 import mimetypes
-import os
 import pathlib
+import threading
 
 import yt_dlp
 from flask import Flask, jsonify, render_template, request, send_file
 
-from .. import downloads
+from .. import control
+from .. import library
 from .. import playlist
 from .. import status
 from ..imports import config
@@ -211,6 +212,12 @@ def _get_full_entry(video_id):
         return None
 
 
+def _thumb_url(stem: str) -> str:
+    if pathlib.Path(library.thumbnail_path(stem)).exists():
+        return f"/thumb/{stem}"
+    return ""
+
+
 def _scan_dir(base, depth=0, max_depth=2):
     if not base.exists() or not base.is_dir():
         return []
@@ -220,7 +227,9 @@ def _scan_dir(base, depth=0, max_depth=2):
             if item.is_file() and item.suffix.lower() in AUDIO_EXTENSIONS:
                 results.append(
                     {
-                        "title": item.stem,
+                        "title": library.title_for_stem(item.stem),
+                        "video_id": item.stem,
+                        "thumbnail": _thumb_url(item.stem),
                         "path": str(item),
                         "filename": item.name,
                         "source": "library"
@@ -287,6 +296,33 @@ def offline():
     return jsonify({"results": songs})
 
 
+def _download_audio(video_id: str, save_dir: str, fmt: str):
+    save_path = pathlib.Path(save_dir).expanduser()
+    save_path.mkdir(parents=True, exist_ok=True)
+    opts = {
+        **BASE_OPTS,
+        "skip_download": False,
+        "outtmpl": str(save_path / "%(id)s.%(ext)s"),
+    }
+    if fmt != "webm":
+        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={video_id}", download=True
+        )
+        filename = ydl.prepare_filename(info)
+        if fmt != "webm":
+            ext = fmt
+            stem = pathlib.Path(filename).stem
+            filename = str(pathlib.Path(save_path) / f"{stem}.{ext}")
+    library.track_download(video_id, filename, info.get("title", "Unknown"))
+    try:
+        library.download_thumbnail(video_id, info.get("thumbnail"))
+    except Exception:
+        pass
+    return filename, info.get("title", "Unknown")
+
+
 @app.route("/download", methods=["POST"])
 def download():
     data = request.get_json(force=True)
@@ -299,34 +335,17 @@ def download():
         return jsonify({"error": f"unsupported format '{fmt}'"}), 400
     if fmt != "webm" and not config.FFMPEG:
         return jsonify({"error": f"ffmpeg not found, cannot convert to {fmt}"}), 400
-    save_path = pathlib.Path(save_dir).expanduser()
-    save_path.mkdir(parents=True, exist_ok=True)
-    opts = {
-        **BASE_OPTS,
-        "skip_download": False,
-        "outtmpl": str(save_path / "%(title).50B.%(ext)s"),
-    }
-    if fmt != "webm":
-        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={vid}", download=True
-            )
-            filename = ydl.prepare_filename(info)
-            if fmt != "webm":
-                ext = fmt
-                stem = pathlib.Path(filename).stem
-                filename = str(pathlib.Path(save_path) / f"{stem}.{ext}")
-            downloads.track(vid, filename, info.get("title", "Unknown"))
-            devlog.log_success("FETCH", 200, "/download", "yt_dlp", f"downloaded {vid}")
-            return jsonify(
-                {
-                    "success": True,
-                    "path": str(filename),
-                    "title": _truncate_title(info.get("title", "Unknown")),
-                }
-            )
+        filename, title = _download_audio(vid, save_dir, fmt)
+        devlog.log_success("FETCH", 200, "/download", "yt_dlp", f"downloaded {vid}")
+        return jsonify(
+            {
+                "success": True,
+                "path": str(filename),
+                "title": _truncate_title(title),
+                "thumbnail": library.thumbnail_path(vid),
+            }
+        )
     except Exception as exc:
         logger.warning("Download failed for %s: %s", vid, exc)
         devlog.log_error("FETCH", 500, "/download", "yt_dlp", f"vid={vid} err={exc}")
@@ -338,16 +357,32 @@ def api_is_downloaded():
     video_id = request.args.get("video_id", "").strip()
     if not video_id:
         return jsonify({"downloaded": False})
-    path = downloads.get_download_path(video_id)
+    path = library.get_download_path(video_id)
     if path and not pathlib.Path(path).exists():
-        downloads.prune(video_id)
+        library.clear_download(video_id)
         path = None
     return jsonify({"downloaded": path is not None, "path": path or ""})
 
 
 @app.route("/api/downloaded-ids")
 def api_downloaded_ids():
-    return jsonify({"ids": downloads.get_downloaded_ids()})
+    return jsonify({"ids": library.get_downloaded_ids()})
+
+
+@app.route("/api/library")
+def api_library():
+    songs = []
+    for k, v in library.load().items():
+        songs.append(
+            {
+                "video_id": k,
+                "title": v.get("title", ""),
+                "liked": bool(v.get("liked")),
+                "downloaded": bool(v.get("downloaded")),
+                "thumbnail": v.get("thumbnail") or "",
+            }
+        )
+    return jsonify({"songs": songs})
 
 
 @app.route("/api/delete-download", methods=["POST"])
@@ -356,7 +391,7 @@ def api_delete_download():
     video_id = data.get("video_id", "").strip()
     if not video_id:
         return jsonify({"error": "missing video_id"}), 400
-    if downloads.delete(video_id):
+    if library.delete(video_id):
         devlog.log_success("FETCH", 200, "/api/delete-download", "flow", f"deleted {video_id}")
         return jsonify({"success": True})
     return jsonify({"error": "not downloaded"}), 404
@@ -371,6 +406,24 @@ def api_now_playing():
         data.get("playing", True),
     )
     return jsonify({"success": True})
+
+
+@app.route("/api/control", methods=["POST"])
+def api_control():
+    data = request.get_json(force=True)
+    command = data.get("command", "").strip()
+    if command not in control.COMMANDS:
+        return jsonify({"error": f"invalid command, expected one of {sorted(control.COMMANDS)}"}), 400
+    control.send(command)
+    devlog.log_success("CTRL", 200, "/api/control", "flow", f"command={command}")
+    return jsonify({"success": True, "command": command})
+
+
+@app.route("/api/control/poll")
+def api_control_poll():
+    command = control.take()
+    return jsonify({"command": command})
+
 
 
 @app.route("/api/playlists")
@@ -531,7 +584,9 @@ def api_album_songs(album_name):
         if f.suffix.lower() in AUDIO_EXTENSIONS:
             songs.append(
                 {
-                    "title": f.stem,
+                    "title": library.title_for_stem(f.stem),
+                    "video_id": f.stem,
+                    "thumbnail": _thumb_url(f.stem),
                     "path": str(f),
                     "filename": f.name,
                     "album": album_name,
@@ -544,21 +599,32 @@ def api_album_songs(album_name):
 def api_local_search():
     q = request.args.get("q", "").strip().lower()
     results = []
+
+    def _match(f):
+        return (
+            q in f.stem.lower()
+            or q in library.title_for_stem(f.stem).lower()
+        )
+
     for f in sorted(FLOW_DIR.rglob("*")):
-        if f.suffix.lower() in AUDIO_EXTENSIONS and q in f.stem.lower():
+        if f.suffix.lower() in AUDIO_EXTENSIONS and _match(f):
             results.append(
                 {
-                    "title": f.stem,
+                    "title": library.title_for_stem(f.stem),
+                    "video_id": f.stem,
+                    "thumbnail": _thumb_url(f.stem),
                     "path": str(f),
                     "filename": f.name,
                 }
             )
     if MUSIC_DIR.exists():
         for f in sorted(MUSIC_DIR.rglob("*")):
-            if f.suffix.lower() in AUDIO_EXTENSIONS and q in f.stem.lower():
+            if f.suffix.lower() in AUDIO_EXTENSIONS and _match(f):
                 results.append(
                     {
-                        "title": f.stem,
+                        "title": library.title_for_stem(f.stem),
+                        "video_id": f.stem,
+                        "thumbnail": _thumb_url(f.stem),
                         "path": str(f),
                         "filename": f.name,
                     }
@@ -568,22 +634,8 @@ def api_local_search():
 
 @app.route("/api/liked")
 def api_liked():
-    liked_file = config.liked_music
-    if not liked_file.exists():
-        return jsonify({"results": []})
-    liked_ids = set()
-    liked_entries = []
-    try:
-        songs = json.loads(liked_file.read_text())
-        for s in songs:
-            url = s.get("url", "")
-            title = s.get("title", "")
-            if "v=" in url:
-                vid = url.split("v=", 1)[1].split("&")[0]
-                liked_ids.add(vid)
-                liked_entries.append({"video_id": vid, "title": title})
-    except Exception:
-        pass
+    liked_ids = library.get_liked_ids()
+    liked_entries = library.get_liked_entries()
     huge_liked = pathlib.Path.home() / ".flow/downloads/liked songs"
     songs = []
     if huge_liked.exists():
@@ -591,14 +643,29 @@ def api_liked():
             if f.suffix.lower() in AUDIO_EXTENSIONS:
                 songs.append(
                     {
-                        "title": f.stem,
+                        "title": library.title_for_stem(f.stem),
+                        "video_id": f.stem,
+                        "thumbnail": _thumb_url(f.stem),
                         "path": str(f),
                         "filename": f.name,
                     }
                 )
     return jsonify(
-        {"results": songs, "liked_ids": list(liked_ids), "liked_entries": liked_entries}
+        {"results": songs, "liked_ids": liked_ids, "liked_entries": liked_entries}
     )
+
+
+def _like_download(video_id: str, save_dir: str, fmt: str):
+    if library.get_download_path(video_id):
+        return
+    if fmt != "webm" and not config.FFMPEG:
+        fmt = "webm"
+    try:
+        _download_audio(video_id, save_dir, fmt)
+        devlog.log_success("FETCH", 200, "/api/like", "yt_dlp", f"auto-downloaded {video_id}")
+    except Exception as exc:
+        logger.warning("Auto-download for liked %s failed: %s", video_id, exc)
+        devlog.log_error("FETCH", 500, "/api/like", "yt_dlp", f"vid={video_id} err={exc}")
 
 
 @app.route("/api/like", methods=["POST"])
@@ -608,22 +675,19 @@ def api_like():
     title = data.get("title", "Unknown")
     if not video_id:
         return jsonify({"error": "missing video_id"}), 400
-    liked_file = config.liked_music
-    liked_file.parent.mkdir(parents=True, exist_ok=True)
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    songs = []
-    if liked_file.exists():
-        try:
-            songs = json.loads(liked_file.read_text())
-        except Exception:
-            songs = []
-    match = next((s for s in songs if s.get("url", "").endswith(f"v={video_id}")), None)
-    if match:
-        songs.remove(match)
-        liked_file.write_text(json.dumps(songs, indent=2))
+    if library.is_liked(video_id):
+        library.mark_unliked(video_id)
         return jsonify({"liked": False, "video_id": video_id})
-    songs.append({"title": title, "url": url})
-    liked_file.write_text(json.dumps(songs, indent=2))
+    library.mark_liked(video_id, title)
+    try:
+        library.download_thumbnail(video_id)
+    except Exception:
+        pass
+    fmt = data.get("format", config.FORMAT)
+    save_dir = data.get("save_dir", str(FLOW_DIR))
+    threading.Thread(
+        target=_like_download, args=(video_id, save_dir, fmt), daemon=True
+    ).start()
     return jsonify({"liked": True, "video_id": video_id})
 
 
@@ -632,17 +696,21 @@ def api_is_liked():
     video_id = request.args.get("video_id", "").strip()
     if not video_id:
         return jsonify({"liked": False})
-    liked_file = config.liked_music
-    if not liked_file.exists():
-        return jsonify({"liked": False})
-    try:
-        songs = json.loads(liked_file.read_text())
-        for s in songs:
-            if video_id in s.get("url", ""):
-                return jsonify({"liked": True})
-    except Exception:
-        pass
-    return jsonify({"liked": False})
+    entry = library.get(video_id)
+    return jsonify(
+        {
+            "liked": library.is_liked(video_id),
+            "thumbnail": entry.get("thumbnail", "") if entry else "",
+        }
+    )
+
+
+@app.route("/thumb/<video_id>")
+def serve_thumb(video_id):
+    path = pathlib.Path(library.thumbnail_path(video_id))
+    if not path.exists():
+        return jsonify({"error": "thumbnail not found"}), 404
+    return send_file(str(path), mimetype="image/jpeg", conditional=True)
 
 
 @app.route("/api/settings", methods=["GET", "POST"])
