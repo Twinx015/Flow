@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import pathlib
 import threading
+import time
 
 import yt_dlp
 from flask import Flask, jsonify, render_template, request, send_file
@@ -197,15 +198,24 @@ def _fetch_radio(video_id, max_results=30):
         raise
 
 
-def _get_full_entry(video_id):
+PLAY_CACHE_TTL = 20 * 60
+_play_cache = {}
+
+
+def _get_full_entry(video_id, fresh=False):
+    now = time.time()
+    cached = _play_cache.get(video_id)
+    if not fresh and cached and now - cached[0] < PLAY_CACHE_TTL:
+        return cached[1]
     try:
         with yt_dlp.YoutubeDL(_ydl_entry) as ydl:
             entry = ydl.extract_info(
                 f"https://www.youtube.com/watch?v={video_id}", download=False
             )
-            if entry:
-                devlog.log_info("FETCH", 200, "/play", "yt_dlp", f"vid={video_id}")
-            return entry
+        if entry:
+            _play_cache[video_id] = (now, entry)
+            devlog.log_info("FETCH", 200, "/play", "yt_dlp", f"vid={video_id}")
+        return entry
     except Exception as exc:
         logger.warning("Failed to get entry for %s: %s", video_id, exc)
         devlog.log_error("FETCH", 500, "/play", "yt_dlp", f"vid={video_id} err={exc}")
@@ -216,6 +226,18 @@ def _thumb_url(stem: str) -> str:
     if pathlib.Path(library.thumbnail_path(stem)).exists():
         return f"/thumb/{stem}"
     return ""
+
+
+def _resolve_thumbnail(thumb: str) -> str:
+    if not thumb:
+        return ""
+    if thumb.startswith("/thumb/"):
+        stem = thumb[len("/thumb/") :].split("?")[0].split("/")[0]
+        path = library.thumbnail_path(stem)
+        if pathlib.Path(path).exists():
+            return path
+        return ""
+    return thumb
 
 
 def _scan_dir(base, depth=0, max_depth=2):
@@ -279,10 +301,11 @@ def recommend():
 @app.route("/play")
 def play():
     vid = request.args.get("video_id", "").strip()
+    fresh = request.args.get("fresh", "0") == "1"
     if not vid:
         return jsonify({"error": "missing query parameter 'video_id'"}), 400
     try:
-        entry = _get_full_entry(vid)
+        entry = _get_full_entry(vid, fresh=fresh)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
     if not entry:
@@ -296,25 +319,50 @@ def offline():
     return jsonify({"results": songs})
 
 
+DOWNLOAD_ATTEMPTS = 3
+
+
 def _download_audio(video_id: str, save_dir: str, fmt: str):
     save_path = pathlib.Path(save_dir).expanduser()
     save_path.mkdir(parents=True, exist_ok=True)
-    opts = {
-        **BASE_OPTS,
-        "skip_download": False,
-        "outtmpl": str(save_path / "%(id)s.%(ext)s"),
-    }
-    if fmt != "webm":
-        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(
-            f"https://www.youtube.com/watch?v={video_id}", download=True
-        )
-        filename = ydl.prepare_filename(info)
-        if fmt != "webm":
-            ext = fmt
-            stem = pathlib.Path(filename).stem
-            filename = str(pathlib.Path(save_path) / f"{stem}.{ext}")
+    last_exc = None
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        try:
+            opts = {
+                **BASE_OPTS,
+                "skip_download": False,
+                "outtmpl": str(save_path / "%(id)s.%(ext)s"),
+                "retries": 5,
+                "fragment_retries": 5,
+            }
+            if fmt != "webm":
+                opts["postprocessors"] = [
+                    {"key": "FFmpegExtractAudio", "preferredcodec": fmt}
+                ]
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(
+                    f"https://www.youtube.com/watch?v={video_id}", download=True
+                )
+                filename = ydl.prepare_filename(info)
+                if fmt != "webm":
+                    ext = fmt
+                    stem = pathlib.Path(filename).stem
+                    filename = str(pathlib.Path(save_path) / f"{stem}.{ext}")
+            break
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Download attempt %s/%s failed for %s: %s",
+                attempt + 1, DOWNLOAD_ATTEMPTS, video_id, exc,
+            )
+            devlog.log_warn(
+                "FETCH", 500, "/download", "yt_dlp",
+                f"vid={video_id} attempt={attempt + 1} err={exc}",
+            )
+            if attempt < DOWNLOAD_ATTEMPTS - 1:
+                time.sleep(2 * (attempt + 1))
+            else:
+                raise last_exc
     library.track_download(video_id, filename, info.get("title", "Unknown"))
     try:
         library.download_thumbnail(video_id, info.get("thumbnail"))
@@ -404,6 +452,7 @@ def api_now_playing():
         data.get("title"),
         data.get("duration", 0),
         data.get("playing", True),
+        _resolve_thumbnail(data.get("thumbnail", "")),
     )
     return jsonify({"success": True})
 

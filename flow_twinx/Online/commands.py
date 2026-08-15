@@ -335,14 +335,14 @@ def savan_cmd(extra, args):
             iteration = 0
             try:
                 while True:
-                    player.play_url(url, title, args, dur)
+                    player.play_url(url, title, args, dur, savan.thumb_url(entry))
                     iteration += 1
                     if repeat_count > 0 and iteration >= repeat_count:
                         break
             except KeyboardInterrupt:
                 pass
         else:
-            player.play_url(url, title, args, dur)
+            player.play_url(url, title, args, dur, savan.thumb_url(entry))
         return
 
     stop = False
@@ -375,7 +375,7 @@ def savan_cmd(extra, args):
                     if getattr(args, "bg", False):
                         if not _fork_bg("Now playing"):
                             return
-                    player.play_url(url, title, args, dur)
+                    player.play_url(url, title, args, dur, savan.thumb_url(entry))
                     idx += _nav_delta()
                 if not repeat:
                     break
@@ -394,7 +394,7 @@ def savan_cmd(extra, args):
         if getattr(args, "bg", False):
             if not _fork_bg("Now playing"):
                 return
-        player.play_url(url, title, args, dur)
+        player.play_url(url, title, args, dur, savan.thumb_url(entry))
 
 
 def savan_search(query):

@@ -84,6 +84,7 @@ let currentPlaylistName = null;
 let pendingPlaylist = null;
 let pendingSong = null;
 let playlistModalMode = "saveQueue";
+let playbackRetries = 0;
 
 let settings = {
   theme: "dark",
@@ -163,6 +164,7 @@ audio.addEventListener("loadedmetadata", () => {
 });
 audio.addEventListener("ended", handleEnd);
 audio.addEventListener("play", () => {
+  playbackRetries = 0;
   updatePlayBtn(true);
   reportNowPlaying(queue[queueIndex], true);
 });
@@ -171,8 +173,7 @@ audio.addEventListener("pause", () => {
   reportNowPlaying(queue[queueIndex], false);
 });
 audio.addEventListener("error", () => {
-  console.error("Playback error, trying next");
-  nextTrack();
+  handlePlaybackFailure(queue[queueIndex]);
 });
 
 progressBar.addEventListener("click", (e) => {
@@ -340,12 +341,32 @@ function reportNowPlaying(track, playing) {
       title: track.title || "Unknown",
       duration: dur,
       playing: playing,
+      thumbnail: track.thumbnail || "",
     }),
   }).catch(() => {});
 }
 
-function loadAndPlay(track) {
+function handlePlaybackFailure(track) {
+  if (!track || track !== queue[queueIndex]) {
+    playbackRetries = 0;
+    return;
+  }
+  const isYt = track.video_id && currentTrackType !== "local";
+  if (isYt && playbackRetries < 3) {
+    playbackRetries++;
+    console.error(`Playback error, retrying (${playbackRetries}/3)`);
+    track.stream_url = "";
+    loadAndPlay(track, true);
+    return;
+  }
+  playbackRetries = 0;
+  console.error("Playback error, trying next");
+  nextTrack();
+}
+
+function loadAndPlay(track, isRetry) {
   if (!track) return;
+  if (!isRetry) playbackRetries = 0;
   nowPlayingTrack = track;
   currentTrackType = track.source || "yt";
   setDisplayInfo(track);
@@ -370,15 +391,19 @@ function loadAndPlay(track) {
     audio.src = track.stream_url;
     audio.play().catch(() => {});
   } else if (track.video_id) {
-    fetch(`/play?video_id=${track.video_id}`)
+    const fresh = isRetry ? "&fresh=1" : "";
+    fetch(`/play?video_id=${track.video_id}${fresh}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.stream_url) {
           track.stream_url = data.stream_url;
           audio.src = data.stream_url;
           audio.play().catch(() => {});
+        } else {
+          handlePlaybackFailure(track);
         }
-      });
+      })
+      .catch(() => handlePlaybackFailure(track));
   }
 
   if (autoPlay && currentTrackType !== "local" && track.video_id) {

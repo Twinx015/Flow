@@ -37,6 +37,17 @@ def search(query, limit=10):
     return out
 
 
+def thumb_url(entry) -> str:
+    images = entry.get("image") or []
+    for img in images:
+        if img.get("quality") == "500x500" and img.get("url"):
+            return img["url"]
+    for img in images:
+        if img.get("url"):
+            return img["url"]
+    return ""
+
+
 def best_url(entry):
     dls = entry.get("downloadUrl", [])
     if not dls:

@@ -1,6 +1,7 @@
 import errno
 import fcntl
 import os
+import pathlib
 import signal
 import sys
 import termios
@@ -9,7 +10,7 @@ import time
 
 import vlc
 
-from .. import status, visualizer
+from .. import library, status, visualizer
 from ..imports import config
 
 _truncate_title = config._truncate_title
@@ -205,7 +206,10 @@ def play_file(filepath, title, args=None, flags=None):
             time.sleep(0.1)
         if duration <= 0:
             duration = 0
-        status.update(title, duration)
+        thumb = library.thumbnail_path(filepath.stem)
+        if not pathlib.Path(thumb).exists():
+            thumb = None
+        status.update(title, duration, thumbnail=thumb)
         dur_min, dur_sec = divmod(int(duration), 60)
         flags_str = _flags_str(args)
         i(f"\nPlaying : {_truncate_title(title)}")

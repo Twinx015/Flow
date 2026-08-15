@@ -7,11 +7,12 @@ WEB_PID_FILE = pathlib.Path.home() / ".flow/web.pid"
 WEB_PORT_FILE = pathlib.Path.home() / ".flow/web_port"
 
 
-def update(title, duration=0, playing=True):
+def update(title, duration=0, playing=True, thumbnail=None):
     data = {
         "title": title or "Unknown",
         "duration": int(duration or 0),
         "playing": bool(playing),
+        "thumbnail": thumbnail or "",
         "ts": time.time(),
     }
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +62,12 @@ def show():
     title = data.get("title", "None")
     if len(title) > 42:
         title = title[:42] + "..."
+    thumb = data.get("thumbnail", "")
+    flow_prefix = str(pathlib.Path.home() / ".flow")
+    if thumb.startswith(flow_prefix):
+        thumb = thumb[len(flow_prefix):]
+    if len(thumb) > 120:
+        thumb = thumb[:120] + "..."
     dur = int(data.get("duration", 0))
     mins, secs = divmod(dur, 60)
     dur_str = f"{mins}:{secs:02d}"
@@ -77,6 +84,7 @@ def show():
     print(f"{Primary}│{Reset}  {'status':<17}: {status_col}{status_val}{Reset}")
     print(f"{Primary}│{Reset}  {'web_mode':<17}: {web_col}{web_val}{Reset}")
     print(f"{Primary}│{Reset}  {stat:<17}: {White}{title}{Reset}")
+    print(f"{Primary}│{Reset}  {'thumbnail':<17}: {White}{thumb}{Reset}")
     print(f"{Primary}│{Reset}  {'total duration':<17}: {White}{dur_str}{Reset}")
     print(sep)
     print(f"{Primary}└─{Reset}\n")

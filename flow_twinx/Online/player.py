@@ -9,7 +9,7 @@ import time
 
 import vlc
 
-from .. import lyrics, status, visualizer
+from .. import library, lyrics, status, visualizer
 from ..imports import config
 
 _truncate_title = config._truncate_title
@@ -199,7 +199,7 @@ def _display_loop(player, title, video_id=None, stop_check=None):
         sys.stdout.flush()
 
 
-def play_url(url, title, args=None, duration=0):
+def play_url(url, title, args=None, duration=0, thumbnail=None):
     global _player, _paused, _next_req, _prev_req
     _paused = False
     _next_req = False
@@ -221,10 +221,11 @@ def play_url(url, title, args=None, duration=0):
                 "title": title,
                 "stream_url": url[:80] + "..." if len(url) > 80 else url,
                 "duration": f"{duration}s",
+                "thumbnail": thumbnail,
             },
         )
 
-        status.update(title, duration)
+        status.update(title, duration, thumbnail=thumbnail)
         dur_min, dur_sec = divmod(int(duration), 60)
         flags = _flags_str(args)
         i(f"\n[⥤ Now : {_truncate_title(title)}]")
@@ -282,6 +283,9 @@ def play_entry(entry, title, args=None, flags=None):
 
     duration = entry.get("duration", 0)
     video_id = entry.get("id")
+    thumb = entry.get("thumbnail") or (
+        library.thumbnail_url_for(video_id) if video_id else None
+    )
 
     config.dev_print(
         "Player (YouTube Entry)",
@@ -292,10 +296,11 @@ def play_entry(entry, title, args=None, flags=None):
             "duration": f"{duration}s | {duration / 60}min",
             "uploader": entry.get("uploader"),
             "webpage_url": entry.get("webpage_url"),
+            "thumbnail": thumb,
         },
     )
 
-    status.update(title, duration)
+    status.update(title, duration, thumbnail=thumb)
     dur_min, dur_sec = divmod(int(duration), 60)
     fstr = _flags_str(args)
     i(f"\n[⥤ Now : {_truncate_title(title)}]")
