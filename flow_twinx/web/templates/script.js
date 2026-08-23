@@ -92,7 +92,6 @@ let settings = {
   bgBlur: 10,
   bgDim: 60,
   defaultVolume: 80,
-  crossfade: 0,
   miniOnBlur: false,
   defaultSource: "youtube",
   format: "webm",
@@ -175,6 +174,35 @@ audio.addEventListener("pause", () => {
 audio.addEventListener("error", () => {
   handlePlaybackFailure(queue[queueIndex]);
 });
+
+// --- SponsorBlock live-skip (isolated helper) ---
+// setupSponsorSkip(segments) arms skipping for the current track; on each
+// `timeupdate` we jump to the end of any segment that contains currentTime.
+// Segments are [{ start_time, end_time }] in seconds.
+let _sponsorSkipSegments = [];
+const _sponsorSkipDone = new Set();
+
+function setupSponsorSkip(segments) {
+  _sponsorSkipSegments = segments || [];
+  _sponsorSkipDone.clear();
+}
+
+function sponsorSkipTick() {
+  if (!_sponsorSkipSegments.length) return;
+  if (audio.paused || !isFinite(audio.currentTime)) return;
+  const t = audio.currentTime;
+  for (let i = 0; i < _sponsorSkipSegments.length; i++) {
+    if (_sponsorSkipDone.has(i)) continue;
+    const seg = _sponsorSkipSegments[i];
+    if (t >= seg.start_time && t < seg.end_time) {
+      _sponsorSkipDone.add(i);
+      audio.currentTime = seg.end_time;
+      break;
+    }
+  }
+}
+
+audio.addEventListener("timeupdate", sponsorSkipTick);
 
 progressBar.addEventListener("click", (e) => {
   const rect = progressBar.getBoundingClientRect();
@@ -367,6 +395,7 @@ function handlePlaybackFailure(track) {
 function loadAndPlay(track, isRetry) {
   if (!track) return;
   if (!isRetry) playbackRetries = 0;
+  setupSponsorSkip(track.segments || []);
   nowPlayingTrack = track;
   currentTrackType = track.source || "yt";
   setDisplayInfo(track);
@@ -392,23 +421,52 @@ function loadAndPlay(track, isRetry) {
     audio.play().catch(() => {});
   } else if (track.video_id) {
     const fresh = isRetry ? "&fresh=1" : "";
-    fetch(`/play?video_id=${track.video_id}${fresh}`)
+    const segPromise = fetch(`/api/segments?video_id=${track.video_id}`)
       .then((r) => r.json())
-      .then((data) => {
-        if (data.stream_url) {
-          track.stream_url = data.stream_url;
-          audio.src = data.stream_url;
-          audio.play().catch(() => {});
-        } else {
-          handlePlaybackFailure(track);
-        }
-      })
-      .catch(() => handlePlaybackFailure(track));
+      .then((d) => d.segments || [])
+      .catch(() => []);
+    const playPromise = fetch(`/play?video_id=${track.video_id}${fresh}`)
+      .then((r) => r.json())
+      .catch(() => null);
+    Promise.all([segPromise, playPromise]).then(([segs, data]) => {
+      if (!data || !data.stream_url) {
+        handlePlaybackFailure(track);
+        return;
+      }
+      track.stream_url = data.stream_url;
+      track.segments = segs;
+      setupSponsorSkip(segs);
+      audio.src = data.stream_url;
+      audio.play().catch(() => {});
+    });
   }
 
   if (autoPlay && currentTrackType !== "local" && track.video_id) {
     autoLoadRecommendations(track.video_id);
   }
+  prewarmNextTrack();
+}
+
+// Warm the server's /play cache for the next queue item so a song switch
+// resolves almost instantly instead of waiting on a full yt-dlp extraction.
+function prewarmNextTrack() {
+  if (!autoPlay) return;
+  let nextIdx;
+  if (isShuffled && queue.length > 0) {
+    do {
+      nextIdx = Math.floor(Math.random() * queue.length);
+    } while (nextIdx === queueIndex && queue.length > 1);
+  } else if (queueIndex < queue.length - 1) {
+    nextIdx = queueIndex + 1;
+  } else if (repeatMode === 2) {
+    nextIdx = 0;
+  } else {
+    return;
+  }
+  const next = queue[nextIdx];
+  if (!next || next.source === "local" || !next.video_id) return;
+  if (next.stream_url) return;
+  fetch(`/play?video_id=${next.video_id}`).catch(() => {});
 }
 
 const artFrame = "/static/Frame%201.jpg";
@@ -1036,6 +1094,13 @@ function loadPlaylists() {
     .catch(() => {});
 }
 
+function fmtTotalDur(secs) {
+  if (!secs || secs < 60) return "";
+  const m = Math.floor(secs / 60),
+    s = Math.round(secs % 60);
+  return ` · ${m}m`;
+}
+
 function renderPlaylists() {
   playlistsGrid.innerHTML = playlistsCache.length
     ? ""
@@ -1043,7 +1108,15 @@ function renderPlaylists() {
   playlistsCache.forEach((p) => {
     const card = document.createElement("div");
     card.className = "album-card playlist-card";
-    card.innerHTML = `<i class="bi bi-music-note-list"></i><span>${p.name}</span><small>${p.count} song${p.count !== 1 ? "s" : ""}</small>`;
+    const sub = [
+      `${p.count} song${p.count !== 1 ? "s" : ""}`,
+      p.local_count ? `${p.local_count} on device` : "",
+      fmtTotalDur(p.duration),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.innerHTML = `<i class="bi bi-music-note-list"></i><span>${p.name}</span><small>${sub}</small>`;
+    card.title = p.description || p.name;
     card.addEventListener("click", () => openPlaylist(p.name));
     playlistsGrid.appendChild(card);
   });
@@ -1058,18 +1131,27 @@ function openPlaylist(name) {
         showToast(data.error);
         return;
       }
-      renderPlaylistDetail(data.name, data.songs || []);
+      renderPlaylistDetail(data.name, data.songs || [], data.description || "");
     })
     .catch(() => {});
 }
 
-function renderPlaylistDetail(name, songs) {
+function renderPlaylistDetail(name, songs, description) {
   playlistSongs.innerHTML = `<div class="album-header">
     <button id="plBackBtn" title="Back"><i class="bi bi-arrow-left"></i></button>
     <span>${name}</span>
     <button id="plPlayBtn" title="Play"><i class="bi bi-play-fill"></i></button>
+    <button id="plRenameBtn" title="Rename playlist"><i class="bi bi-pencil"></i></button>
+    <button id="plExportBtn" title="Export as M3U"><i class="bi bi-file-earmark-arrow-down"></i></button>
+    <button id="plDedupeBtn" title="Remove duplicates"><i class="bi bi-copy"></i></button>
     <button id="plDeleteBtn" title="Delete playlist"><i class="bi bi-trash"></i></button>
   </div>`;
+  if (description) {
+    playlistSongs.insertAdjacentHTML(
+      "beforeend",
+      `<div style="color:var(--text3);font-size:12px;padding:0 4px 6px;">${description}</div>`,
+    );
+  }
   document.getElementById("plBackBtn").addEventListener("click", () => {
     playlistSongs.innerHTML = "";
   });
@@ -1079,6 +1161,66 @@ function renderPlaylistDetail(name, songs) {
   document.getElementById("plDeleteBtn").addEventListener("click", () =>
     deletePlaylist(name),
   );
+  document.getElementById("plRenameBtn").addEventListener("click", () => {
+    const newName = window.prompt("New playlist name:", name);
+    if (!newName || newName.trim() === name) return;
+    fetch("/api/playlists/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old: name, new: newName.trim() }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          showToast(`Renamed to "${data.name}"`);
+          loadPlaylists();
+          openPlaylist(data.name);
+        } else {
+          showToast("Failed: " + (data.error || "Unknown error"));
+        }
+      })
+      .catch(() => showToast("Rename failed"));
+  });
+  document.getElementById("plExportBtn").addEventListener("click", () => {
+    window.location.href = `/api/playlist/export?name=${encodeURIComponent(name)}`;
+  });
+  document.getElementById("plDedupeBtn").addEventListener("click", () => {
+    fetch("/api/playlist/dedupe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        showToast(
+          data.removed
+            ? `Removed ${data.removed} duplicate${data.removed !== 1 ? "s" : ""}`
+            : "No duplicates found",
+        );
+        loadPlaylists();
+        openPlaylist(name);
+      })
+      .catch(() => showToast("Dedupe failed"));
+  });
+  const dragOrder = (fromIdx, toIdx) => {
+    const order = songs.map((s) => s.video_id);
+    const [moved] = order.splice(fromIdx, 1);
+    order.splice(toIdx, 0, moved);
+    fetch("/api/playlist/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, order }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          openPlaylist(name);
+        } else {
+          showToast("Failed: " + (data.error || "Reorder rejected"));
+        }
+      })
+      .catch(() => showToast("Reorder failed"));
+  };
   if (songs.length === 0) {
     playlistSongs.insertAdjacentHTML(
       "beforeend",
@@ -1086,6 +1228,7 @@ function renderPlaylistDetail(name, songs) {
     );
     return;
   }
+  let dragIdx = null;
   songs.forEach((item, idx) => {
     const entry = {
       ...item,
@@ -1095,6 +1238,28 @@ function renderPlaylistDetail(name, songs) {
     };
     const card = createSongCard(entry, entry.source);
     card.addEventListener("click", () => playPlaylist(songs, idx));
+    if (item.local) {
+      card.insertAdjacentHTML(
+        "beforeend",
+        '<span class="song-duration" title="Available on device" style="color:var(--accent);"><i class="bi bi-hdd"></i></span>',
+      );
+    }
+    card.draggable = true;
+    card.style.cursor = "grab";
+    card.addEventListener("dragstart", () => {
+      dragIdx = idx;
+      card.style.opacity = "0.4";
+    });
+    card.addEventListener("dragend", () => {
+      card.style.opacity = "";
+      dragIdx = null;
+    });
+    card.addEventListener("dragover", (e) => e.preventDefault());
+    card.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (dragIdx === null || dragIdx === idx) return;
+      dragOrder(dragIdx, idx);
+    });
     const removeBtn = document.createElement("button");
     removeBtn.className = "pl-remove";
     removeBtn.title = "Remove from playlist";
@@ -1371,7 +1536,6 @@ function updateSettingsUI() {
   document.getElementById("setBgBlur").value = settings.bgBlur || 10;
   document.getElementById("setBgDim").value = settings.bgDim || 60;
   document.getElementById("setVolume").value = settings.defaultVolume || 80;
-  document.getElementById("setCrossfade").value = settings.crossfade || 2;
   document.getElementById("setMiniOnBlur").checked =
     settings.miniOnBlur || false;
   document.getElementById("setDefaultSource").value =
@@ -1389,7 +1553,6 @@ function saveSettingsToAPI() {
     bgBlur: parseInt(document.getElementById("setBgBlur").value),
     bgDim: parseInt(document.getElementById("setBgDim").value),
     defaultVolume: parseInt(document.getElementById("setVolume").value),
-    crossfade: parseInt(document.getElementById("setCrossfade").value) || 2,
     miniOnBlur: document.getElementById("setMiniOnBlur").checked,
     defaultSource: document.getElementById("setDefaultSource").value,
     downloadPath: document.getElementById("setDownloadPath").value || "~/.flow/downloads",
@@ -1415,7 +1578,6 @@ function resetSettings() {
     bgBlur: 10,
     bgDim: 60,
     defaultVolume: 80,
-    crossfade: 2,
     miniOnBlur: false,
     defaultSource: "youtube",
     downloadPath: "~/.flow/downloads",

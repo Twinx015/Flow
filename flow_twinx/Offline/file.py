@@ -1,8 +1,8 @@
 import pathlib
 import shutil
 
-from flow_twinx import config
-from flow_twinx import library
+from ..imports import config
+from .. import library
 
 AUDIO_EXTENSIONS = {
     ".mp3",

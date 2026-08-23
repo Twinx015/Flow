@@ -3,7 +3,7 @@ import pathlib
 
 import yt_dlp
 
-from .. import library
+from .. import library, sponsor
 from ..imports import config
 
 logger = logging.getLogger(__name__)
@@ -16,11 +16,13 @@ BASE_OPTS = {
     "no_warnings": True,
     "noprogress": True,
     "noplaylist": True,
-    "format": "bestaudio",
+    "format": "bestaudio/best",
     "skip_download": True,
     "socket_timeout": 10,
     "retries": 2,
     "extractor_retries": 2,
+    "js_runtimes": {"node": {}},
+    "extractor_args": {"youtube": {"player_client": ["android"]}},
 }
 
 ydl_opts = {
@@ -93,8 +95,11 @@ def search(query, limit=3):
 
 def download_url(url, outdir, fmt=None):
     opts = {**ydl_opts_dwn, "outtmpl": f"{outdir}/%(id)s.%(ext)s"}
+    pps = sponsor.download_postprocessors()
     if fmt and fmt != "webm":
-        opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
+        pps = pps + [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
+    if pps:
+        opts["postprocessors"] = pps
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -176,8 +181,7 @@ def fetch_radio(query, max_results=30):
 
 def get_entry(url):
     try:
-        with yt_dlp.YoutubeDL(ydl_opts_play) as ydl:
-            entry = ydl.extract_info(url, download=False)
+        entry = sponsor.stream_info(url, opts=ydl_opts_play)
     except Exception as exc:
         logger.warning("Failed to get entry for %s: %s", url, exc)
         return None

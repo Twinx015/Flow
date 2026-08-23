@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 import sounddevice as sd
 from .imports import config
@@ -12,6 +14,7 @@ FULL_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 _bars = None
 _peak = None
 _stream = None
+_lock = threading.Lock()
 
 
 def _build_chars(height):
@@ -65,7 +68,8 @@ def _audio_callback(indata, frames, time_info, status):
 
     overall_rms = np.sqrt(np.mean(mono ** 2))
     if overall_rms <= 0.01:
-        _bars *= 0.4
+        with _lock:
+            _bars *= 0.4
         if _peak is not None:
             _peak *= 0.9
         return
@@ -86,7 +90,8 @@ def _audio_callback(indata, frames, time_info, status):
     else:
         normalized = np.zeros(n)
 
-    _bars = 0.4 * _bars + 0.6 * normalized
+    with _lock:
+        _bars = 0.4 * _bars + 0.6 * normalized
 
 
 def start():
@@ -111,17 +116,21 @@ def start():
 
 
 def stop():
-    global _stream
+    global _stream, _bars, _peak
     if _stream is not None:
         _stream.stop()
         _stream.close()
         _stream = None
+    with _lock:
+        _bars = None
+        _peak = None
 
 
 def render(color="\033[0m", reset="\033[0m"):
-    if _bars is None:
-        return ""
-    bars = _bars.copy()
+    with _lock:
+        if _bars is None:
+            return ""
+        bars = _bars.copy()
     chars = _build_chars(config.BarHeight)
     max_h = len(chars) - 1
     space = " " * config.get_bar_spacing()

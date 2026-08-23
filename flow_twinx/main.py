@@ -191,6 +191,7 @@ def main():
         "command", nargs="?", default=None, help="subcommand (play, search, list, ...)"
     )
     parser.add_argument("--check", action="store_true", help="check all dependencies")
+    parser.add_argument("--port", type=int, default=None, metavar="PORT", help="run web server on a specific port")
 
     args, unknown = parser.parse_known_args()
 
@@ -250,7 +251,7 @@ def main():
                         int(WEB_PORT.read_text().strip()) if WEB_PORT.exists() else None
                     )
                 except ValueError, OSError:
-                    pass
+                        pass
 
             existing_alive = False
             if existing_pid is not None:
@@ -322,6 +323,29 @@ def main():
             _run_web(port)
         return
 
+    if getattr(args, "port", None) is not None:
+        port = args.port
+        WEB_PID.parent.mkdir(parents=True, exist_ok=True)
+        if not config.DEV_MODE:
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning, message=".*fork.*"
+            )
+            pid = os.fork()
+            if pid > 0:
+                WEB_PID.write_text(str(pid))
+                WEB_PORT.write_text(str(port))
+                print(f"{P}Flow web server → http://127.0.0.1:{port}{R}")
+                return
+            devnull = os.open(os.devnull, os.O_RDWR)
+            os.dup2(devnull, 1)
+            os.dup2(devnull, 2)
+            _run_web(port)
+        else:
+            WEB_PID.write_text(str(os.getpid()))
+            WEB_PORT.write_text(str(port))
+            print(f"{P}Flow web server → http://127.0.0.1:{port} (dev){R}")
+            _run_web(port)
+        return
     if getattr(args, "status", False):
         from .status import show as show_status
 

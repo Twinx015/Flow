@@ -11,6 +11,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from .. import control
 from .. import library
 from .. import playlist
+from .. import sponsor
 from .. import status
 from ..imports import config
 from . import devlog
@@ -28,7 +29,7 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 @app.after_request
 def _log_response(response):
     if config.DEV_MODE:
-        status = response.status_code
+        status_code = response.status_code
         method = request.method
         route = request.path
         msg = ""
@@ -45,14 +46,14 @@ def _log_response(response):
                         msg = "ok"
             except Exception:
                 pass
-        if status >= 500:
-            devlog.log_error(method, status, route, "flask", msg)
-        elif status >= 400:
-            devlog.log_warn(method, status, route, "flask", msg)
+        if status_code >= 500:
+            devlog.log_error(method, status_code, route, "flask", msg)
+        elif status_code >= 400:
+            devlog.log_warn(method, status_code, route, "flask", msg)
         elif method == "POST":
-            devlog.log_success(method, status, route, "flask", msg)
+            devlog.log_success(method, status_code, route, "flask", msg)
         else:
-            devlog.log_info(method, status, route, "flask", msg)
+            devlog.log_info(method, status_code, route, "flask", msg)
     return response
 
 
@@ -80,6 +81,8 @@ AUDIO_EXTENSIONS = {
     ".webm",
 }
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
 SEARCH_CACHE_MAX = 50
 _search_cache = {}
 
@@ -88,11 +91,13 @@ BASE_OPTS = {
     "no_warnings": True,
     "noprogress": True,
     "noplaylist": True,
-    "format": "bestaudio",
+    "format": "bestaudio/best",
     "skip_download": True,
     "socket_timeout": 10,
     "retries": 2,
     "extractor_retries": 2,
+    "js_runtimes": {"node": {}},
+    "extractor_args": {"youtube": {"player_client": ["android"]}},
 }
 
 _ydl_search = {**BASE_OPTS, "default_search": "ytsearch1", "extract_flat": True}
@@ -101,15 +106,7 @@ _ydl_radio = {**BASE_OPTS, "noplaylist": False, "extract_flat": True}
 
 
 def _get_stream_url(entry):
-    if not entry.get("formats"):
-        return None
-    for fmt in reversed(entry["formats"]):
-        if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
-            return fmt.get("url")
-    for fmt in reversed(entry["formats"]):
-        if fmt.get("acodec") != "none":
-            return fmt.get("url")
-    return entry.get("url")
+    return sponsor.stream_url(entry)
 
 
 def _full_res_thumbnail(url):
@@ -139,6 +136,7 @@ def _entry_to_dict(entry):
         "thumbnail": _get_thumbnail(entry),
         "channel": entry.get("uploader", "Unknown"),
         "duration": entry.get("duration", 0),
+        "segments": _cached_segments(entry.get("id")) if sponsor.enabled() else [],
     }
 
 
@@ -201,19 +199,60 @@ def _fetch_radio(video_id, max_results=30):
 PLAY_CACHE_TTL = 20 * 60
 _play_cache = {}
 
+SEG_CACHE_TTL = 20 * 60
+_seg_cache = {}
+_seg_inflight = set()
+
+
+def _fetch_segments_background(video_id, duration=None):
+    """Fetch SponsorBlock segments off the request thread and cache them.
+
+    Playback must not wait on the SponsorBlock API, so segment data is served
+    from `_seg_cache` (populated in the background) and the frontend arms
+    skipping as soon as it arrives.
+    """
+    if video_id in _seg_inflight:
+        return
+    _seg_inflight.add(video_id)
+    try:
+        segments = sponsor.fetch_segments(video_id, duration)
+        _seg_cache[video_id] = (time.time(), segments)
+    except Exception as exc:
+        logger.warning("Background SponsorBlock fetch failed for %s: %s", video_id, exc)
+    finally:
+        _seg_inflight.discard(video_id)
+
+
+def _ensure_segments(video_id, duration=None):
+    if not _cached_segments(video_id) and video_id not in _seg_inflight:
+        threading.Thread(
+            target=_fetch_segments_background, args=(video_id, duration), daemon=True
+        ).start()
+
+
+def _cached_segments(video_id):
+    now = time.time()
+    cached = _seg_cache.get(video_id)
+    if cached and now - cached[0] < SEG_CACHE_TTL:
+        return cached[1]
+    return []
+
 
 def _get_full_entry(video_id, fresh=False):
     now = time.time()
     cached = _play_cache.get(video_id)
     if not fresh and cached and now - cached[0] < PLAY_CACHE_TTL:
         return cached[1]
+    _ensure_segments(video_id)
     try:
-        with yt_dlp.YoutubeDL(_ydl_entry) as ydl:
-            entry = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={video_id}", download=False
-            )
+        entry = sponsor.stream_info(
+            f"https://www.youtube.com/watch?v={video_id}",
+            opts=_ydl_entry,
+            with_segments=False,
+        )
         if entry:
             _play_cache[video_id] = (now, entry)
+            _ensure_segments(entry.get("id"), entry.get("duration"))
             devlog.log_info("FETCH", 200, "/play", "yt_dlp", f"vid={video_id}")
         return entry
     except Exception as exc:
@@ -313,6 +352,24 @@ def play():
     return jsonify(_entry_to_dict(entry))
 
 
+@app.route("/api/segments")
+def api_segments():
+    vid = request.args.get("video_id", "").strip()
+    if not vid:
+        return jsonify({"error": "missing query parameter 'video_id'"}), 400
+    if not sponsor.enabled():
+        return jsonify({"segments": []})
+    _ensure_segments(vid)
+    segments = _cached_segments(vid)
+    if not segments and vid in _seg_inflight:
+        for _ in range(10):
+            time.sleep(0.2)
+            segments = _cached_segments(vid)
+            if segments or vid not in _seg_inflight:
+                break
+    return jsonify({"segments": segments})
+
+
 @app.route("/offline")
 def offline():
     songs = _scan_dir(FLOW_DIR)
@@ -335,10 +392,13 @@ def _download_audio(video_id: str, save_dir: str, fmt: str):
                 "retries": 5,
                 "fragment_retries": 5,
             }
+            pps = sponsor.download_postprocessors()
             if fmt != "webm":
-                opts["postprocessors"] = [
+                pps = pps + [
                     {"key": "FFmpegExtractAudio", "preferredcodec": fmt}
                 ]
+            if pps:
+                opts["postprocessors"] = pps
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}", download=True
@@ -477,14 +537,20 @@ def api_control_poll():
 
 @app.route("/api/playlists")
 def api_playlists():
-    return jsonify(
-        {
-            "playlists": [
-                {"name": n, "count": len(playlist.get(n))}
-                for n in playlist.list_all()
-            ]
-        }
-    )
+    out = []
+    for n in playlist.list_all():
+        inf = playlist.info(n) or {}
+        out.append(
+            {
+                "name": inf.get("name", n),
+                "count": inf.get("count", 0),
+                "description": inf.get("description", ""),
+                "duration": inf.get("duration", 0),
+                "local_count": inf.get("local_count", 0),
+                "modified": inf.get("modified", 0),
+            }
+        )
+    return jsonify({"playlists": out})
 
 
 @app.route("/api/playlist")
@@ -492,26 +558,172 @@ def api_playlist():
     name = request.args.get("name", "").strip()
     if not name:
         return jsonify({"error": "missing name"}), 400
-    if name not in playlist.list_all():
+    actual = playlist.resolve_name(name)
+    if actual is None:
         return jsonify({"error": "playlist not found"}), 404
     songs = []
-    for s in playlist.get(name):
-        vid = s.get("video_id", "")
+    for s in playlist.get(actual):
+        vid = s.get("id", "")
+        local = s.get("local_path") or (
+            playlist.find_local_copy(vid) if s.get("source") == "youtube" else None
+        )
+        stored_thumb = s.get("thumb")
+        if stored_thumb and pathlib.Path(stored_thumb).exists():
+            thumbnail = "/local/" + str(stored_thumb).lstrip("/")
+        elif vid and s.get("source") == "youtube":
+            thumbnail = _full_res_thumbnail(
+                f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
+            )
+        else:
+            thumbnail = ""
         songs.append(
             {
                 "title": s.get("title", "Unknown"),
                 "video_id": vid,
-                "url": s.get("url", ""),
-                "thumbnail": _full_res_thumbnail(
-                    f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
-                )
-                if vid
-                else "",
-                "channel": "" if vid else "Local",
-                "duration": 0,
+                "url": s.get("ref", ""),
+                "thumbnail": thumbnail,
+                "thumb_path": stored_thumb or "",
+                "channel": "Local" if s.get("source") == "local" else "",
+                "duration": int(s.get("duration") or 0),
+                "local": bool(local and pathlib.Path(local).exists()),
             }
         )
-    return jsonify({"name": name, "songs": songs})
+    inf = playlist.info(actual) or {}
+    return jsonify(
+        {"name": inf.get("name", actual), "description": inf.get("description", ""), "songs": songs}
+    )
+
+
+def _resolve_playlist_or_error(name):
+    actual = playlist.resolve_name(name) if name else None
+    if actual is None:
+        return None, (jsonify({"error": "playlist not found"}), 404)
+    return actual, None
+
+
+@app.route("/api/playlists/rename", methods=["POST"])
+def api_playlists_rename():
+    data = request.get_json(force=True)
+    old = data.get("old", "").strip()
+    new = data.get("new", "").strip()
+    if not old or not new:
+        return jsonify({"error": "missing old or new"}), 400
+    if new.lower() in playlist.RESERVED_NAMES:
+        return jsonify({"error": "'new' is a reserved name"}), 400
+    actual, err = _resolve_playlist_or_error(old)
+    if err:
+        return err
+    if playlist.rename(actual, new):
+        return jsonify({"success": True, "name": new})
+    return jsonify({"error": f"cannot rename to '{new}' (already exists?)"}), 409
+
+
+@app.route("/api/playlists/duplicate", methods=["POST"])
+def api_playlists_duplicate():
+    data = request.get_json(force=True)
+    src = data.get("src", "").strip()
+    new = data.get("name", "").strip()
+    if not src or not new:
+        return jsonify({"error": "missing src or name"}), 400
+    actual, err = _resolve_playlist_or_error(src)
+    if err:
+        return err
+    if playlist.duplicate(actual, new):
+        return jsonify({"success": True, "name": new})
+    return jsonify({"error": f"cannot duplicate to '{new}' (already exists?)"}), 409
+
+
+@app.route("/api/playlists/merge", methods=["POST"])
+def api_playlists_merge():
+    data = request.get_json(force=True)
+    dst = data.get("dst", "").strip()
+    src = data.get("src", "").strip()
+    if not dst or not src:
+        return jsonify({"error": "missing dst or src"}), 400
+    dst_a, err = _resolve_playlist_or_error(dst)
+    if err:
+        return err
+    src_a, err = _resolve_playlist_or_error(src)
+    if err:
+        return err
+    result = playlist.merge(dst_a, src_a)
+    if result is None:
+        return jsonify({"error": "merge failed"}), 500
+    added, skipped = result
+    return jsonify({"success": True, "added": added, "skipped": skipped})
+
+
+@app.route("/api/playlist/reorder", methods=["POST"])
+def api_playlist_reorder():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    order = data.get("order")
+    if not name or not isinstance(order, list):
+        return jsonify({"error": "missing name or order"}), 400
+    actual, err = _resolve_playlist_or_error(name)
+    if err:
+        return err
+    if not playlist.reorder(actual, [str(o) for o in order]):
+        return jsonify({"error": "order does not match playlist tracks"}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/playlist/description", methods=["POST"])
+def api_playlist_description():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    desc = str(data.get("description", ""))
+    actual, err = _resolve_playlist_or_error(name)
+    if err:
+        return err
+    playlist.set_description(actual, desc)
+    return jsonify({"success": True, "description": desc})
+
+
+@app.route("/api/playlist/clear", methods=["POST"])
+def api_playlist_clear():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    actual, err = _resolve_playlist_or_error(name)
+    if err:
+        return err
+    removed = playlist.clear(actual)
+    return jsonify({"success": True, "removed": removed})
+
+
+@app.route("/api/playlist/dedupe", methods=["POST"])
+def api_playlist_dedupe():
+    data = request.get_json(force=True)
+    name = data.get("name", "").strip()
+    actual, err = _resolve_playlist_or_error(name)
+    if err:
+        return err
+    removed = playlist.dedupe(actual)
+    return jsonify({"success": True, "removed": removed})
+
+
+@app.route("/api/playlist/export")
+def api_playlist_export():
+    from io import BytesIO
+
+    name = request.args.get("name", "").strip()
+    actual, err = _resolve_playlist_or_error(name)
+    if err:
+        return err
+    tracks = playlist.get(actual)
+    lines = ["#EXTM3U"]
+    for t in tracks:
+        dur = int(t.get("duration") or 0)
+        lines.append(f"#EXTINF:{dur},{t.get('title', 'Unknown')}")
+        lines.append(t.get("local_path") or t.get("ref", ""))
+    buf = BytesIO(("\n".join(lines) + "\n").encode())
+    filename = f"{playlist._slugify(actual)}.m3u"
+    return send_file(
+        buf,
+        mimetype="audio/x-mpegurl",
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @app.route("/api/playlists/create", methods=["POST"])
@@ -542,12 +754,22 @@ def api_playlist_add():
     title = (song.get("title") or "").strip()
     if not name or not title:
         return jsonify({"error": "missing name or song title"}), 400
+    if name.lower() in playlist.RESERVED_NAMES:
+        return jsonify({"error": f"'{name}' is a reserved playlist name"}), 400
+    actual = playlist.resolve_name(name)
+    if actual is None and not playlist.create(name):
+        return jsonify({"error": "could not create playlist"}), 500
     vid = song.get("video_id", "")
     url = song.get("url", "") or (
         f"https://www.youtube.com/watch?v={vid}" if vid else ""
     )
-    playlist.add_song(name, title, vid, url)
-    return jsonify({"success": True, "name": name})
+    state, _ = playlist.add_track(
+        actual or name,
+        playlist.make_track(title=title, ref=url, video_id=vid,
+                            duration=int(song.get("duration") or 0)),
+    )
+    added = state == "added"
+    return jsonify({"success": True, "added": added, "name": name})
 
 
 @app.route("/api/playlist/remove", methods=["POST"])
@@ -573,12 +795,18 @@ def api_playlists_save():
     mode = data.get("mode", "append")
     if not name:
         return jsonify({"error": "name cannot be empty"}), 400
-    if name not in playlist.list_all():
+    actual = playlist.resolve_name(name)
+    if actual is None:
+        if name.lower() in playlist.RESERVED_NAMES:
+            return jsonify({"error": f"'{name}' is a reserved playlist name"}), 400
         playlist.create(name)
     elif mode == "overwrite":
-        playlist.delete(name)
+        playlist.delete(actual)
         playlist.create(name)
+        actual = name
+    target = actual or name
     count = 0
+    skipped = 0
     for s in songs:
         title = (s.get("title") or "").strip()
         if not title:
@@ -587,9 +815,19 @@ def api_playlists_save():
         url = s.get("url", "") or (
             f"https://www.youtube.com/watch?v={vid}" if vid else ""
         )
-        playlist.add_song(name, title, vid, url)
-        count += 1
-    return jsonify({"success": True, "name": name, "count": count})
+        state, _ = playlist.add_track(
+            target,
+            playlist.make_track(title=title, ref=url, video_id=vid,
+                                duration=int(s.get("duration") or 0)),
+        )
+        if state == "added":
+            count += 1
+        else:
+            skipped += 1
+    resp = {"success": True, "name": name, "count": count}
+    if skipped:
+        resp["skipped"] = skipped
+    return jsonify(resp)
 
 
 @app.route("/local/<path:filepath>")
@@ -606,8 +844,8 @@ def serve_local(filepath):
         return jsonify({"error": "access denied"}), 403
     if not p.exists() or not p.is_file():
         return jsonify({"error": "file not found"}), 404
-    if p.suffix.lower() not in AUDIO_EXTENSIONS:
-        return jsonify({"error": "not an audio file"}), 400
+    if p.suffix.lower() not in AUDIO_EXTENSIONS | IMAGE_EXTENSIONS:
+        return jsonify({"error": "not a media file"}), 400
     mimetype, _ = mimetypes.guess_type(str(p))
     return send_file(str(p), mimetype=mimetype or "audio/mpeg", conditional=True)
 

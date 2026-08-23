@@ -9,7 +9,7 @@ import termios
 import threading
 import time
 
-from .. import help_detail, library, playlist, shortcuts
+from .. import help_detail, library, playlist, plist_cli, shortcuts
 from ..imports import config, merge_flags
 from ..Offline import player as off_player
 from . import player, savan, youtube
@@ -81,7 +81,7 @@ COMMANDS = {
     "like": "Like a song",
     "download": "Download audio from YouTube | -f <format> (opus, m4a, mp3, webm)",
     "delete": "Delete a downloaded song (alias: dl-d)",
-    "playlist": "Manage playlists (alias: plist)",
+    "playlist": "Manage playlists | create add remove list play rename move dup merge sort clear dedupe info export import download (alias: plist)",
     "switch": "Switch to Offline mode",
     "help": "Show this help message",
     "short": "Show/update command shortcuts",
@@ -568,15 +568,27 @@ def radio(extra, args):
     _radio_tracks = tracks
 
     save_pl = getattr(args, "save_playlist", None)
-    if save_pl is not True:
-        pl_name = save_pl if isinstance(save_pl, str) else tracks[0][0]
-    else:
-        pl_name = tracks[0][0]
+    pl_name = save_pl if isinstance(save_pl, str) else tracks[0][0]
     if save_pl:
+        if not playlist.exists(pl_name):
+            playlist.create(pl_name)
+        added = skipped = 0
         for title, vid, dur in _radio_tracks:
             url = f"https://www.youtube.com/watch?v={vid}"
-            playlist.add_song(pl_name, title, vid, url)
-        i(f"    Saved {len(_radio_tracks)} tracks to playlist: {pl_name}")
+            state, _ = playlist.add_track(
+                pl_name,
+                playlist.make_track(
+                    title=title, ref=url, video_id=vid, duration=int(dur or 0)
+                ),
+            )
+            if state == "added":
+                added += 1
+            elif state == "skipped":
+                skipped += 1
+        msg = f"    Saved {added} tracks to playlist: {pl_name}"
+        if skipped:
+            msg += f" ({skipped} duplicates skipped)"
+        i(msg)
         if not getattr(args, "download", False):
             return
 
@@ -877,130 +889,66 @@ def switch_mode():
 
 def playlist_cmd(extra, args):
     global _last_played
-    if not extra:
-        names = playlist.list_all()
-        if not names:
-            m("No playlists")
-            return
-        i("Playlists:")
-        for name in names:
-            songs = playlist.get(name)
-            m(f"  {name}  ({len(songs)} songs)")
-        return
 
-    subcmd = playlist.resolve_subcmd(extra[0])
-
-    if subcmd == "create":
-        if len(extra) < 2:
-            e("Usage: playlist create <name>")
-            return
-        name = " ".join(extra[1:])
-        if playlist.create(name):
-            i(f"Created playlist: {name}")
-        else:
-            m(f"Playlist '{name}' already exists")
-
-    elif subcmd == "delete":
-        if len(extra) < 2:
-            e("Usage: playlist delete <name>")
-            return
-        name = " ".join(extra[1:])
-        if playlist.delete(name):
-            i(f"Deleted playlist: {name}")
-        else:
-            m(f"Playlist '{name}' not found")
-
-    elif subcmd == "add":
-        if len(extra) < 3:
-            e("Usage: playlist add <name> <index_or_query>")
-            return
-        name = extra[1]
-        target = extra[2]
+    def add_source(target_words, args):
+        target = target_words[0]
         if target.isdigit():
             idx = int(target) - 1
             if idx < 0 or idx >= len(_last_results):
                 e("Index out of range")
-                return
-            entry, title, _ = _last_results[idx]
-            vid = entry.get("id", "")
-            url = (
-                entry.get("webpage_url")
-                or entry.get("url")
-                or f"https://www.youtube.com/watch?v={vid}"
-            )
-            playlist.add_song(name, title, vid, url)
-            i(f"Added: {_truncate_title(title)} to {name}")
+                return None
+            entry, title, dur = _last_results[idx]
         else:
-            query = " ".join(extra[2:])
+            query = " ".join(target_words)
             _do_search(query)
             if not _last_results:
                 e("No results found")
-                return
-            entry, title, _ = _last_results[0]
-            vid = entry.get("id", "")
-            url = (
-                entry.get("webpage_url")
-                or entry.get("url")
-                or f"https://www.youtube.com/watch?v={vid}"
-            )
-            playlist.add_song(name, title, vid, url)
-            i(f"Added: {_truncate_title(title)} to {name}")
+                return None
+            entry, title, dur = _last_results[0]
+        vid = entry.get("id", "")
+        url = (
+            entry.get("webpage_url")
+            or entry.get("url")
+            or f"https://www.youtube.com/watch?v={vid}"
+        )
+        track = playlist.make_track(
+            title=title, ref=url, video_id=vid, duration=int(dur or 0)
+        )
+        local = playlist.find_local_copy(vid)
+        if local:
+            track["local_path"] = local
+        return track
 
-    elif subcmd == "remove":
-        if len(extra) < 3:
-            e("Usage: playlist remove <name> <index_or_name>")
-            return
-        name = extra[1]
-        target = " ".join(extra[2:])
-        if target.isdigit():
-            ok, msg = playlist.remove_song(name, index=int(target) - 1)
-        else:
-            ok, msg = playlist.remove_song(name, title_match=target)
-        if ok:
-            i(f"Removed: {msg} from {name}")
-        else:
-            e(f"     {msg}")
-
-    elif subcmd == "list":
-        if len(extra) < 2:
-            e("Usage: playlist list <name>")
-            return
-        name = extra[1]
-        songs = playlist.get(name)
-        if not songs:
-            m(f"Playlist '{name}' is empty or not found")
-            return
-        i(f"  {name}:")
-        for idx, s in enumerate(songs, 1):
-            m(f"  {idx}. {_truncate_title(s['title'])}")
-
-    elif subcmd == "play":
-        if len(extra) < 2:
-            e("Usage: playlist play <name>")
-            return
-        name = extra[1]
-        songs = playlist.get(name)
-        if not songs:
-            m(f"Playlist '{name}' is empty or not found")
-            return
-        tracks = list(songs)
+    def play(actual, tracks, args):
+        global _last_played
+        tracks = list(tracks)
         if getattr(args, "shuffle", False):
             random.shuffle(tracks)
         repeat = getattr(args, "repeat", False)
         repeat_count = getattr(args, "repeat_count", 0)
         iteration = 0
         if getattr(args, "bg", False):
-            if not _fork_bg(f"Playing playlist: {name}"):
+            if not _fork_bg(f"Playing playlist: {actual}"):
                 return
         try:
             while True:
                 idx = 0
                 while 0 <= idx < len(tracks):
                     s = tracks[idx]
-                    vid = s.get("video_id", "")
                     title = s.get("title", "Unknown")
-                    url = s.get("url") or f"https://www.youtube.com/watch?v={vid}"
                     short = _truncate_title(title)
+                    src = playlist.resolve_track(s)
+                    if isinstance(src, pathlib.Path):
+                        print(
+                            f"{P}Playing local copy: {short}...{R}", end="\r", flush=True
+                        )
+                        _last_played = (None, title)
+                        playlist.backfill_local(actual, idx, src)
+                        off_player.play_file(src, title, args)
+                        idx += _nav_delta()
+                        continue
+                    vid = s.get("id", "")
+                    url = src or f"https://www.youtube.com/watch?v={vid}"
                     print(f"{P}Fetching: {short}...{R}", end="\r", flush=True)
                     entry = youtube.get_entry(url)
                     if not entry:
@@ -1018,37 +966,54 @@ def playlist_cmd(extra, args):
         except KeyboardInterrupt:
             pass
 
-    else:
-        name = extra[0]
-        songs = playlist.get(name)
-        if not songs:
-            m(f"Playlist '{name}' is empty or not found")
+    def list_liked():
+        liked = library.get_liked_entries()
+        if not liked:
+            m("No liked songs yet")
             return
-        if getattr(args, "download", False):
-            dl_dir = playlist.download_dir(name)
-            i(f"    Downloading {len(songs)} songs to {dl_dir}...")
-            for idx, s in enumerate(songs, 1):
-                vid = s.get("video_id", "")
-                url = s.get("url") or f"https://www.youtube.com/watch?v={vid}"
-                try:
-                    youtube.download_url(url, dl_dir)
-                    i(
-                        f"    Downloaded ({idx}/{len(songs)}): {_truncate_title(s['title'])}"
-                    )
-                except Exception as exc:
-                    e(
-                        f"     Failed ({idx}/{len(songs)}): {_truncate_title(s['title'])} - {exc}"
-                    )
-            return
-        i(f"  {name}:")
-        for idx, s in enumerate(songs, 1):
-            m(f"  {idx}. {_truncate_title(s['title'])}")
+        i("  liked:")
+        for idx, s in enumerate(liked, 1):
+            m(f"  {idx}. {_truncate_title(s.get('title', 'Unknown'))}")
+
+    def download(actual, tracks, args):
+        dl_dir = playlist.download_dir(actual)
+        i(f"    Downloading {len(tracks)} songs to {dl_dir}...")
+        done = 0
+        for idx, s in enumerate(tracks, 1):
+            vid = s.get("id", "")
+            url = s.get("ref") or f"https://www.youtube.com/watch?v={vid}"
+            try:
+                youtube.download_url(url, dl_dir)
+                local = playlist.find_local_copy(vid) or str(dl_dir)
+                playlist.backfill_local(actual, idx - 1, local)
+                done += 1
+                i(
+                    f"    Downloaded ({idx}/{len(tracks)}): {_truncate_title(s.get('title'))}"
+                )
+            except Exception as exc:
+                e(
+                    f"     Failed ({idx}/{len(tracks)}): {_truncate_title(s.get('title'))} - {exc}"
+                )
+        if done == len(tracks):
+            i(f"    All {done} tracks available on device")
+
+    plist_cli.handle(
+        extra,
+        args,
+        {
+            "add_source": add_source,
+            "play": play,
+            "play_liked": _play_liked,
+            "list_liked": list_liked,
+            "download": download,
+        },
+    )
 
 
 def show_help(inf=False):
     if inf:
         print(f"{T}Online Commands (detailed):{R}")
-        for cmd, lines in help_detail.ONLINE_HELP.items():
+        for cmd, lines in help_detail._online_help().items():
             for line in lines:
                 print(f"  {line}")
             print()

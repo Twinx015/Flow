@@ -9,7 +9,7 @@ import termios
 import threading
 import time
 
-from .. import help_detail, playlist, shortcuts
+from .. import help_detail, playlist, plist_cli, shortcuts
 from ..imports import config, is_connected, merge_flags
 from . import file as lib
 from . import player
@@ -81,7 +81,7 @@ COMMANDS = {
     "list": "List local music library",
     "radio": "Radio mode | shuffle & loop library | Ctrl+C next | Ctrl+Q quit",
     "like": "Like the currently playing song",
-    "playlist": "Manage playlists (alias: plist)",
+    "playlist": "Manage playlists | create add remove list play rename move dup merge sort clear dedupe info export import (alias: plist)",
     "switch": "Switch to Online mode (checks connection)",
     "help": "Show this help message",
     "short": "Show/update command shortcuts",
@@ -337,114 +337,43 @@ def like_track():
 
 def playlist_cmd(extra, args=None):
     global _last_played
-    if not extra:
-        names = playlist.list_all()
-        if not names:
-            m("No playlists")
-            return
-        i("Playlists:")
-        for name in names:
-            songs = playlist.get(name)
-            m(f"  {name}  ({len(songs)} songs)")
-        return
 
-    subcmd = playlist.resolve_subcmd(extra[0])
-
-    if subcmd == "create":
-        if len(extra) < 2:
-            e("Usage: playlist create <name>")
-            return
-        name = " ".join(extra[1:])
-        if playlist.create(name):
-            i(f"Created playlist: {name}")
-        else:
-            m(f"Playlist '{name}' already exists")
-
-    elif subcmd == "delete":
-        if len(extra) < 2:
-            e("Usage: playlist delete <name>")
-            return
-        name = " ".join(extra[1:])
-        if playlist.delete(name):
-            i(f"Deleted playlist: {name}")
-        else:
-            m(f"Playlist '{name}' not found")
-
-    elif subcmd == "add":
-        if len(extra) < 3:
-            e("Usage: playlist add <name> <index_or_name>")
-            return
-        name = extra[1]
-        target = extra[2]
+    def add_source(target_words, args):
+        target = target_words[0]
         if target.isdigit():
             idx = int(target) - 1
             if idx < 0 or idx >= len(_last_results):
                 e("Index out of range")
-                return
+                return None
             song_path = _last_results[idx]
-            playlist.add_song(name, lib.display_name(song_path), "", str(song_path))
-            i(f"Added: {lib.display_name(song_path)} to {name}")
         else:
             results = lib.find_songs(target)
             if not results:
                 e(f"No songs found matching '{target}'")
-                return
+                return None
             song_path = results[0]
-            playlist.add_song(name, lib.display_name(song_path), "", str(song_path))
-            i(f"Added: {lib.display_name(song_path)} to {name}")
+        return playlist.make_track(
+            title=lib.display_name(song_path), ref=str(song_path), source="local"
+        )
 
-    elif subcmd == "remove":
-        if len(extra) < 3:
-            e("Usage: playlist remove <name> <index_or_name>")
-            return
-        name = extra[1]
-        target = " ".join(extra[2:])
-        if target.isdigit():
-            ok, msg = playlist.remove_song(name, index=int(target) - 1)
-        else:
-            ok, msg = playlist.remove_song(name, title_match=target)
-        if ok:
-            i(f"Removed: {msg} from {name}")
-        else:
-            e(f"     {msg}")
-
-    elif subcmd == "list":
-        if len(extra) < 2:
-            e("Usage: playlist list <name>")
-            return
-        name = extra[1]
-        songs = playlist.get(name)
-        if not songs:
-            m(f"Playlist '{name}' is empty or not found")
-            return
-        i(f"  {name}:")
-        for idx, s in enumerate(songs, 1):
-            m(f"  {idx}. {s['title']}")
-
-    elif subcmd == "play":
-        if len(extra) < 2:
-            e("Usage: playlist play <name>")
-            return
-        name = extra[1]
-        songs = playlist.get(name)
-        if not songs:
-            m(f"Playlist '{name}' is empty or not found")
-            return
-        tracks = list(songs)
+    def play(actual, tracks, args):
+        global _last_played
+        tracks = list(tracks)
         if getattr(args, "shuffle", False):
             random.shuffle(tracks)
         repeat = getattr(args, "repeat", False)
         repeat_count = getattr(args, "repeat_count", 0)
         iteration = 0
         if getattr(args, "bg", False):
-            if not _fork_bg(f"Playing playlist: {name}"):
+            if not _fork_bg(f"Playing playlist: {actual}"):
                 return
         try:
             while True:
                 idx = 0
                 while 0 <= idx < len(tracks):
                     s = tracks[idx]
-                    fpath = pathlib.Path(s.get("url", ""))
+                    src = playlist.resolve_track(s)
+                    fpath = pathlib.Path(src)
                     if not fpath.exists():
                         m(f"    Skipping {s.get('title', 'Unknown')} (file not found)")
                         idx += 1
@@ -460,15 +389,25 @@ def playlist_cmd(extra, args=None):
         except KeyboardInterrupt:
             pass
 
-    else:
-        name = extra[0]
-        songs = playlist.get(name)
+    def list_liked():
+        songs = lib.get_liked_songs()
         if not songs:
-            m(f"Playlist '{name}' is empty or not found")
+            m("No liked songs yet")
             return
-        i(f"  {name}:")
-        for idx, s in enumerate(songs, 1):
-            m(f"  {idx}. {s['title']}")
+        i("  liked:")
+        for idx, p in enumerate(songs, 1):
+            m(f"  {idx}. {lib.display_name(p)}")
+
+    plist_cli.handle(
+        extra,
+        args,
+        {
+            "add_source": add_source,
+            "play": play,
+            "play_liked": _play_liked,
+            "list_liked": list_liked,
+        },
+    )
 
 
 def search(query: str):
@@ -615,7 +554,7 @@ def radio(extra, args):
 def show_help(inf=False):
     if inf:
         print(f"{T}Offline Commands (detailed):{R}")
-        for cmd, lines in help_detail.OFFLINE_HELP.items():
+        for cmd, lines in help_detail._offline_help().items():
             for line in lines:
                 print(f"  {line}")
             print()

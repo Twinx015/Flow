@@ -27,7 +27,7 @@ R = config.Reset
 m = lambda t: print(f"{M}{t}{R}")
 e = lambda t: print(f"{E}{t}{R}")
 i = lambda t: print(f"{P if config.Mode == 'Online' else S}{t}{R}")
-t = lambda t: print(f"{T}{t}{R}")
+ter = lambda t: print(f"{T}{t}{R}")
 
 _paused = False
 _player = None

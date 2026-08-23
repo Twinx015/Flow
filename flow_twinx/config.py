@@ -95,6 +95,9 @@ FFMPEG = False
 FORMAT = "webm"
 _VALID_FORMATS = {"opus", "m4a", "mp3", "webm"}
 
+AD_SKIP = True
+SPONSOR_CATEGORIES = ["sponsor", "selfpromo", "intro", "outro"]
+
 
 def set_format(fmt):
     global FORMAT
@@ -147,8 +150,6 @@ def dev_print(label: str, data: dict | list | str | None = None):
 
 
 def get_bar_spacing():
-    import os
-
     if BarSpacing == "min":
         return 0
     if BarSpacing == "max":
@@ -179,6 +180,10 @@ def check_deps():
         ("vlc", _try_import("vlc")),
         ("yt-dlp", _try_import("yt_dlp")),
         ("psutil", _try_import("psutil")),
+        ("flask", _try_import("flask")),
+        ("numpy", _try_import("numpy")),
+        ("sounddevice", _try_import("sounddevice")),
+        ("ytmusicapi", _try_import("ytmusicapi")),
     ]
     print(f"  | {'dep':10s} | {'status':13s} | {'test':6s} |")
     print(f"  | {'─' * 10} | {'─' * 13} | {'─' * 6} |")
@@ -194,7 +199,7 @@ def export_flow():
     flow_dir = pathlib.Path.home() / ".flow"
     dest = pathlib.Path.home() / "Downloads" / "flow_backup.zip"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    skip_dirs = {"downloads", "playlist", "LOGS"}
+    skip_dirs = {"downloads", "playlist", "playlists", "LOGS"}
     skip_files = {"vlc.pid"}
     included = 0
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -291,6 +296,8 @@ def _load_config():
         DEV_MODE, \
         FFMPEG, \
         FORMAT, \
+        AD_SKIP, \
+        SPONSOR_CATEGORIES, \
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO
     if not CONFIG_FILE.exists():
@@ -323,6 +330,8 @@ def _load_config():
             and 0 <= data["bar_spacing"] <= 4
         ):
             BarSpacing = data["bar_spacing"]
+        elif "bar_spacing" in data and data["bar_spacing"] in _BAR_SPACING:
+            BarSpacing = data["bar_spacing"]
         if (
             "sensitivity" in data
             and isinstance(data["sensitivity"], (int, float))
@@ -333,6 +342,12 @@ def _load_config():
             DEV_MODE = data["dev"]
         if "ffmpeg" in data and isinstance(data["ffmpeg"], bool):
             FFMPEG = data["ffmpeg"]
+        if "ad_skip" in data and isinstance(data["ad_skip"], bool):
+            AD_SKIP = data["ad_skip"]
+        if "sponsor_categories" in data and isinstance(data["sponsor_categories"], list):
+            cats = [c for c in data["sponsor_categories"] if isinstance(c, str)]
+            if cats:
+                SPONSOR_CATEGORIES = cats
         if "format" in data and data["format"] in _VALID_FORMATS:
             FORMAT = data["format"]
         if "max_search" in data and isinstance(data["max_search"], int) and 1 <= data["max_search"] <= 20:
@@ -356,6 +371,8 @@ def _save_config():
         "sensitivity": Sensitivity,
         "dev": DEV_MODE,
         "ffmpeg": FFMPEG,
+        "ad_skip": AD_SKIP,
+        "sponsor_categories": SPONSOR_CATEGORIES,
         "format": FORMAT,
         "max_search": MAX_SEARCH_RESULTS,
         "max_radio": MAX_RESULTS_RADIO,
@@ -427,6 +444,7 @@ def cmd_config(extra: list[str], args=None):
         Sensitivity, \
         DEV_MODE, \
         FORMAT, \
+        AD_SKIP, \
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO
     if extra and (extra[0] in ("help", "-h")):
@@ -440,6 +458,8 @@ def cmd_config(extra: list[str], args=None):
         print(f"  {Grey}barspacing{Reset} (0-4, min, fit, max — current: {BarSpacing})")
         print(f"  {Grey}sensitivity{Reset} (0.5-5.0, current: {Sensitivity})")
         print(f"  {Grey}format{Reset}     (opus, m4a, mp3, webm — current: {FORMAT})")
+        print(f"  {Grey}ad_skip{Reset}     (true/false — SponsorBlock segment skipping, current: {AD_SKIP})")
+        print(f"  {Grey}sponsor_categories{Reset} (in config file: sponsor, selfpromo, intro, outro, ...)")
         print(f"  {Grey}max_search{Reset} (1-20, current: {MAX_SEARCH_RESULTS})")
         print(f"  {Grey}max_radio{Reset}  (1-50, current: {MAX_RESULTS_RADIO})")
         print(f"\n{Tertiary}Available colors:{Reset}")
@@ -545,17 +565,23 @@ def cmd_config(extra: list[str], args=None):
         _save_config()
         print(f"{Tertiary}Dev mode set to {DEV_MODE}{Reset}")
     elif target == "format":
-        if value not in _VALID_FORMATS:
-            print(f"Unknown format '{value}'. Options: opus, m4a, mp3, webm")
+        if not set_format(value):
+            if value not in _VALID_FORMATS:
+                print(f"Unknown format '{value}'. Options: opus, m4a, mp3, webm")
+            else:
+                print(
+                    f"{YELLOW}ffmpeg not found. Install ffmpeg to use {value} format.{Reset}\n"
+                    f"{Grey}  Keeping current format: {FORMAT}{Reset}"
+                )
             return
-        FORMAT = value
-        if FORMAT != "webm" and not FFMPEG:
-            print(
-                f"{YELLOW}ffmpeg not found. Install ffmpeg to use {FORMAT} format.{Reset}\n"
-                f"{Grey}  Defaulting to webm until ffmpeg is installed.{Reset}"
-            )
-        _save_config()
         print(f"{Tertiary}Default download format changed to {value}{Reset}")
+    elif target == "ad_skip":
+        if value not in ("true", "false"):
+            print("Usage: config ad_skip true/false")
+            return
+        AD_SKIP = value == "true"
+        _save_config()
+        print(f"{Tertiary}Sponsor segment skipping set to {AD_SKIP}{Reset}")
     elif target in ("max_search", "maxresults"):
         try:
             v = int(extra[1])
@@ -590,4 +616,3 @@ def cmd_config(extra: list[str], args=None):
 _load_config()
 
 FFMPEG = _detect_ffmpeg()
-_save_config()

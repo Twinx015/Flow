@@ -9,7 +9,7 @@ import time
 
 import vlc
 
-from .. import library, lyrics, status, visualizer
+from .. import library, lyrics, sponsor, status, visualizer
 from ..imports import config
 
 _truncate_title = config._truncate_title
@@ -25,7 +25,7 @@ R = config.Reset
 m = lambda t: print(f"{M}{t}{R}")
 e = lambda t: print(f"{E}{t}{R}")
 i = lambda t: print(f"{P if config.Mode == 'Online' else S}{t}{R}")
-t = lambda t: print(f"{T}{t}{R}")
+ter = lambda t: print(f"{T}{t}{R}")
 
 _paused = False
 _player = None
@@ -260,18 +260,7 @@ def play_entry(entry, title, args=None, flags=None):
     instance = vlc.Instance("--no-video --quiet")
     _player = instance.media_player_new()
 
-    stream_url = None
-    for fmt in reversed(entry.get("formats", [])):
-        if fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
-            stream_url = fmt.get("url")
-            break
-    if not stream_url:
-        for fmt in reversed(entry.get("formats", [])):
-            if fmt.get("acodec") != "none":
-                stream_url = fmt.get("url")
-                break
-    if not stream_url:
-        stream_url = entry.get("url")
+    stream_url = sponsor.stream_url(entry)
     if not stream_url:
         e("     No playable stream found")
         return
@@ -312,6 +301,12 @@ def play_entry(entry, title, args=None, flags=None):
 
     skipped = False
 
+    skip_segments = sponsor.segments(entry) if sponsor.enabled() else []
+    skip_thread = None
+    if skip_segments:
+        skip_thread = sponsor.VlcSkipThread(_player, skip_segments)
+        skip_thread.start()
+
     def stop_check():
         nonlocal skipped
         if flags:
@@ -332,4 +327,6 @@ def play_entry(entry, title, args=None, flags=None):
         sys.stdout.flush()
         raise
     finally:
+        if skip_thread:
+            skip_thread.stop()
         _restore_pause_input()
