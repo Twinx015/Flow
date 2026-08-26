@@ -165,6 +165,24 @@ def _do_search(query):
     t.join()
 
 
+def _choose_result(results):
+    if len(results) == 1 or not sys.stdin.isatty():
+        return 0
+    for idx, (entry, title, dur) in enumerate(results, 1):
+        mins, secs = divmod(int(dur), 60)
+        uploader = entry.get("uploader", "")
+        m(f"  {idx}. {_truncate_title(title)}  ({mins}:{secs:02d}) [{uploader}]")
+    try:
+        choice = input(f"{P}Play which track? [1-{len(results)}, default 1] {R}").strip()
+    except (EOFError, KeyboardInterrupt):
+        return 0
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(results):
+            return idx
+    return 0
+
+
 def play(extra: list[str], args):
     if config.kill_stored():
         print(f"{P}Stopped VLC{R}")
@@ -241,7 +259,8 @@ def play(extra: list[str], args):
         except KeyboardInterrupt:
             pass
     else:
-        entry, title, _ = _last_results[0]
+        idx = _choose_result(_last_results)
+        entry, title, _ = _last_results[idx]
         entry = _resolve_entry(entry)
         _last_played = (entry, title)
         if getattr(args, "bg", False):
