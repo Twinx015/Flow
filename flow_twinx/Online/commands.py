@@ -165,22 +165,33 @@ def _do_search(query):
     t.join()
 
 
-def _choose_result(results):
-    if len(results) == 1 or not sys.stdin.isatty():
-        return 0
+def _print_results(results):
     for idx, (entry, title, dur) in enumerate(results, 1):
         mins, secs = divmod(int(dur), 60)
         uploader = entry.get("uploader", "")
         m(f"  {idx}. {_truncate_title(title)}  ({mins}:{secs:02d}) [{uploader}]")
+
+
+def _read_choice(prompt, count):
+    if not sys.stdin.isatty():
+        return None
     try:
-        choice = input(f"{P}Play which track? [1-{len(results)}, default 1] {R}").strip()
+        choice = input(f"{P}{prompt}{R}").strip()
     except (EOFError, KeyboardInterrupt):
-        return 0
+        return None
     if choice.isdigit():
         idx = int(choice) - 1
-        if 0 <= idx < len(results):
+        if 0 <= idx < count:
             return idx
-    return 0
+    return None
+
+
+def _choose_result(results):
+    if len(results) == 1:
+        return 0
+    _print_results(results)
+    idx = _read_choice(f"Play which track? [1-{len(results)}, default 1] ", len(results))
+    return idx if idx is not None else 0
 
 
 def play(extra: list[str], args):
@@ -496,7 +507,7 @@ def _like_autodownload(url: str, video_id: str, title: str):
 
 
 def search(query: str):
-    global _last_results
+    global _last_results, _last_played
     if not query:
         print("Search query required")
         return
@@ -504,10 +515,16 @@ def search(query: str):
     if not _last_results:
         print("No results found")
         return
-    for i, (entry, title, dur) in enumerate(_last_results, 1):
-        mins, secs = divmod(int(dur), 60)
-        uploader = entry.get("uploader", "")
-        m(f"  {i}. {_truncate_title(title)}  ({mins}:{secs:02d}) [{uploader}]")
+    _print_results(_last_results)
+    idx = _read_choice(
+        f"Play a track? [1-{len(_last_results)}, Enter to skip] ", len(_last_results)
+    )
+    if idx is None:
+        return
+    entry, title, _ = _last_results[idx]
+    entry = _resolve_entry(entry)
+    _last_played = (entry, title)
+    player.play_entry(entry, title, None)
 
 
 _truncate_title = config._truncate_title
