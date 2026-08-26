@@ -29,6 +29,9 @@ i = lambda t: print(f"{P if config.Mode == 'Online' else S}{t}{R}")
 _last_results = []
 _last_played = None
 
+PAGE_STEP = 5
+MAX_PAGE_RESULTS = 30
+
 _radio_quit = False
 _radio_skip = False
 _radio_tracks = []
@@ -172,26 +175,53 @@ def _print_results(results):
         m(f"  {idx}. {_truncate_title(title)}  ({mins}:{secs:02d}) [{uploader}]")
 
 
-def _read_choice(prompt, count):
-    if not sys.stdin.isatty():
-        return None
-    try:
-        choice = input(f"{P}{prompt}{R}").strip()
-    except (EOFError, KeyboardInterrupt):
-        return None
-    if choice.isdigit():
-        idx = int(choice) - 1
-        if 0 <= idx < count:
-            return idx
-    return None
+def _fetch_more(query, limit):
+    stop = False
+    t = threading.Thread(target=_spinner, args=(lambda: stop,), daemon=True)
+    t.start()
+    results = youtube.search(query, limit)
+    stop = True
+    t.join()
+    return results
 
 
-def _choose_result(results):
+def _pick_result(query, allow_skip):
+    global _last_results
+    limit = len(_last_results)
+    while True:
+        _print_results(_last_results)
+        hint = "m for more" + (", Enter to skip" if allow_skip else ", default 1")
+        prompt = f"Play which track? [1-{len(_last_results)}, {hint}] "
+        if not sys.stdin.isatty():
+            return None if allow_skip else 0
+        try:
+            choice = input(f"{P}{prompt}{R}").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None if allow_skip else 0
+        if choice in ("m", "more"):
+            if limit >= MAX_PAGE_RESULTS:
+                e("    No more results")
+                continue
+            limit = min(limit + PAGE_STEP, MAX_PAGE_RESULTS)
+            more = _fetch_more(query, limit)
+            if len(more) <= len(_last_results):
+                e("    No more results")
+                continue
+            _last_results = more
+            continue
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(_last_results):
+                return idx
+        if not choice:
+            return None if allow_skip else 0
+        e("    Invalid choice")
+
+
+def _choose_result(query, results):
     if len(results) == 1:
         return 0
-    _print_results(results)
-    idx = _read_choice(f"Play which track? [1-{len(results)}, default 1] ", len(results))
-    return idx if idx is not None else 0
+    return _pick_result(query, allow_skip=False)
 
 
 def play(extra: list[str], args):
@@ -270,7 +300,7 @@ def play(extra: list[str], args):
         except KeyboardInterrupt:
             pass
     else:
-        idx = _choose_result(_last_results)
+        idx = _choose_result(arg, _last_results)
         entry, title, _ = _last_results[idx]
         entry = _resolve_entry(entry)
         _last_played = (entry, title)
@@ -515,10 +545,7 @@ def search(query: str):
     if not _last_results:
         print("No results found")
         return
-    _print_results(_last_results)
-    idx = _read_choice(
-        f"Play a track? [1-{len(_last_results)}, Enter to skip] ", len(_last_results)
-    )
+    idx = _pick_result(query, allow_skip=True)
     if idx is None:
         return
     entry, title, _ = _last_results[idx]
