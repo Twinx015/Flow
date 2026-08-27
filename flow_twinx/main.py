@@ -2,6 +2,7 @@ import argparse
 import builtins
 import json
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -147,12 +148,92 @@ def _check_vlc():
         sys.exit(1)
 
 
-def main():
-    _check_vlc()
+def _setup_island():
+    src = Path(__file__).resolve().parent / "Hyprland" / "island.qml"
+    dest_dir = Path.home() / ".config" / "quickshell"
+    dest = dest_dir / "island.qml"
+    if not src.exists():
+        print(f"{config.Red}island.qml not found in this installation ({src}){R}")
+        sys.exit(1)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    print(f"{P}Music island installed → {dest}{R}")
+    print(f"{M}Launch it with:{R} {S}quickshell -p {dest}{R}")
 
+
+def _resume(args):
+    from . import status as _status
+
+    data = _status._read()
+    title = (data.get("title") or "").strip()
+    thumb = data.get("thumbnail") or ""
+    if not title:
+        print(f"{M}No last-played track in ~/.flow/status.json{R}")
+        return
+
+    online = thumb.startswith(("http://", "https://"))
+    offline = (".cache/" in thumb) or thumb.startswith(str(Path.home() / ".flow"))
+    args.bg = True
+
+    if online:
+        config.Mode = "Online"
+        _online_commands.resume(title, args)
+    elif offline:
+        config.Mode = "Offline"
+        _offline_commands.resume(title, args, thumb)
+    else:
+        print(f"{M}Could not tell if last track is online or offline (thumbnail: {thumb}){R}")
+
+
+def _act_current(action):
+    from . import status as _status
+
+    data = _status._read()
+    title = (data.get("title") or "").strip()
+    thumb = data.get("thumbnail") or ""
+    if not title:
+        print(f"{M}No last-played track in ~/.flow/status.json{R}")
+        return 1
+
+    web_pid = Path.home() / ".flow/web.pid"
+    has_player = config.read_pid() is not None or _web_alive(web_pid)
+    if not has_player:
+        print(f"{M}No player is currently running (no pid file){R}")
+        return 1
+
+    if not (data.get("playing") and _status._fresh(data)):
+        print(f"{M}No track is currently playing{R}")
+        return 1
+
+    online = thumb.startswith(("http://", "https://"))
+    offline = (".cache/" in thumb) or thumb.startswith(str(Path.home() / ".flow"))
+    if online:
+        config.Mode = "Online"
+        _online_commands.act_on_current(action, title, thumb)
+    elif offline:
+        config.Mode = "Offline"
+        _offline_commands.act_on_current(action, title, thumb)
+    else:
+        print(f"{M}Could not tell if current track is online or offline (thumbnail: {thumb}){R}")
+        return 1
+    return 0
+
+
+def main():
     parser = argparse.ArgumentParser(description="Flow Music Player")
     parser.add_argument("--play", nargs="+", help="play a song")
+    parser.add_argument("--play-off", nargs="+", help="play a song from the local library (offline)")
     parser.add_argument("--rd", nargs="+", help="play radio mix")
+    parser.add_argument(
+        "--radio-off",
+        nargs="*",
+        help="play radio (shuffled local library) without going online",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume the last played track from ~/.flow/status.json",
+    )
     parser.add_argument(
         "--stop",
         action="store_true",
@@ -188,12 +269,33 @@ def main():
         "--status", action="store_true", help="show playback and web mode status"
     )
     parser.add_argument(
+        "--like",
+        action="store_true",
+        help="like the currently playing song (requires an active player)",
+    )
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        help="download the currently playing song (requires an active player)",
+    )
+    parser.add_argument(
+        "--setup-island",
+        action="store_true",
+        help="install the Hyprland music island into ~/.config/quickshell",
+    )
+    parser.add_argument(
         "command", nargs="?", default=None, help="subcommand (play, search, list, ...)"
     )
     parser.add_argument("--check", action="store_true", help="check all dependencies")
     parser.add_argument("--port", type=int, default=None, metavar="PORT", help="run web server on a specific port")
 
     args, unknown = parser.parse_known_args()
+
+    if getattr(args, "setup_island", False):
+        _setup_island()
+        sys.exit(0)
+
+    _check_vlc()
 
     if getattr(args, "check", False):
         print(f"{P}Dependency Check:{R}\n")
@@ -366,7 +468,25 @@ def main():
             _send_control(command, sig, label)
         sys.exit(0)
 
-    if getattr(args, "play", None) is not None:
+    if getattr(args, "like", False):
+        sys.exit(_act_current("like"))
+    if getattr(args, "download", False):
+        sys.exit(_act_current("download"))
+
+    forced_offline = False
+    if getattr(args, "resume", False):
+        _resume(args)
+        sys.exit(0)
+    if getattr(args, "play_off", None) is not None:
+        args.command = "play"
+        unknown = args.play_off + unknown
+        forced_offline = True
+        args.bg = True
+    elif getattr(args, "radio_off", None) is not None:
+        args.command = "radio"
+        unknown = args.radio_off + unknown
+        forced_offline = True
+    elif getattr(args, "play", None) is not None:
         args.command = "play"
         unknown = args.play + unknown
     elif getattr(args, "rd", None) is not None:
@@ -397,17 +517,20 @@ def main():
         unknown = [args.command] + unknown
         args.command = "play"
 
-    stop = False
-    t = threading.Thread(target=_spinner, args=(lambda: stop,), daemon=True)
-    t.start()
-    try:
-        if is_connected():
-            config.Mode = "Online"
-        else:
-            config.Mode = "Offline"
-    finally:
-        stop = True
-        t.join()
+    if forced_offline:
+        config.Mode = "Offline"
+    else:
+        stop = False
+        t = threading.Thread(target=_spinner, args=(lambda: stop,), daemon=True)
+        t.start()
+        try:
+            if is_connected():
+                config.Mode = "Online"
+            else:
+                config.Mode = "Offline"
+        finally:
+            stop = True
+            t.join()
 
     commands = _load_commands()
 

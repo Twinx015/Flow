@@ -714,7 +714,7 @@ def api_playlist_export():
     lines = ["#EXTM3U"]
     for t in tracks:
         dur = int(t.get("duration") or 0)
-        lines.append(f"#EXTINF:{dur},{t.get('title', 'Unknown')}")
+        lines.append(f"#EXTINF:{dur},{_truncate_title(t.get('title', 'Unknown'))}")
         lines.append(t.get("local_path") or t.get("ref", ""))
     buf = BytesIO(("\n".join(lines) + "\n").encode())
     filename = f"{playlist._slugify(actual)}.m3u"

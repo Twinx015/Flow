@@ -29,6 +29,9 @@ i = lambda t: print(f"{P if config.Mode == 'Online' else S}{t}{R}")
 _last_results = []
 _last_played = None
 
+PAGE_STEP = 5
+MAX_PAGE_RESULTS = 30
+
 _radio_quit = False
 _radio_skip = False
 _radio_tracks = []
@@ -165,6 +168,62 @@ def _do_search(query):
     t.join()
 
 
+def _print_results(results):
+    for idx, (entry, title, dur) in enumerate(results, 1):
+        mins, secs = divmod(int(dur), 60)
+        uploader = entry.get("uploader", "")
+        m(f"  {idx}. {_truncate_title(title)}  ({mins}:{secs:02d}) [{uploader}]")
+
+
+def _fetch_more(query, limit):
+    stop = False
+    t = threading.Thread(target=_spinner, args=(lambda: stop,), daemon=True)
+    t.start()
+    results = youtube.search(query, limit)
+    stop = True
+    t.join()
+    return results
+
+
+def _pick_result(query, allow_skip):
+    global _last_results
+    limit = len(_last_results)
+    while True:
+        _print_results(_last_results)
+        hint = "m for more" + (", Enter to skip" if allow_skip else ", default 1")
+        prompt = f"Play which track? [1-{len(_last_results)}, {hint}] "
+        if not sys.stdin.isatty():
+            return None if allow_skip else 0
+        try:
+            choice = input(f"{P}{prompt}{R}").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None if allow_skip else 0
+        if choice in ("m", "more"):
+            if limit >= MAX_PAGE_RESULTS:
+                e("    No more results")
+                continue
+            limit = min(limit + PAGE_STEP, MAX_PAGE_RESULTS)
+            more = _fetch_more(query, limit)
+            if len(more) <= len(_last_results):
+                e("    No more results")
+                continue
+            _last_results = more
+            continue
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(_last_results):
+                return idx
+        if not choice:
+            return None if allow_skip else 0
+        e("    Invalid choice")
+
+
+def _choose_result(query, results):
+    if len(results) == 1:
+        return 0
+    return _pick_result(query, allow_skip=False)
+
+
 def play(extra: list[str], args):
     if config.kill_stored():
         print(f"{P}Stopped VLC{R}")
@@ -241,13 +300,29 @@ def play(extra: list[str], args):
         except KeyboardInterrupt:
             pass
     else:
-        entry, title, _ = _last_results[0]
+        idx = _choose_result(arg, _last_results)
+        entry, title, _ = _last_results[idx]
         entry = _resolve_entry(entry)
         _last_played = (entry, title)
         if getattr(args, "bg", False):
             if not _fork_bg("Now playing"):
                 return
         player.play_entry(entry, title, args)
+
+
+def resume(title, args):
+    global _last_results, _last_played
+    _do_search(title)
+    if not _last_results:
+        e("     No results found to resume")
+        return
+    entry, t, _ = _last_results[0]
+    entry = _resolve_entry(entry)
+    _last_played = (entry, t)
+    if getattr(args, "bg", False):
+        if not _fork_bg("Resuming"):
+            return
+    player.play_entry(entry, t, args)
 
 
 def _resolve_entry(entry):
@@ -451,7 +526,8 @@ def like_track():
             except Exception:
                 pass
             if not library.get_download_path(video_id):
-                _like_autodownload(url, video_id, title)
+                if config.DOWN_ON_LIKE:
+                    _like_autodownload(url, video_id, title)
 
 
 def _like_autodownload(url: str, video_id: str, title: str):
@@ -476,8 +552,92 @@ def _like_autodownload(url: str, video_id: str, title: str):
         e(f"    Auto-download failed: {exc}")
 
 
+def _vid_from_thumb(thumb):
+    if not thumb:
+        return None
+    try:
+        if "/vi/" in thumb:
+            return thumb.split("/vi/")[1].split("/")[0].split("?")[0]
+        return pathlib.Path(thumb).stem
+    except Exception:
+        return None
+
+
+def _resolve_current(title, thumb):
+    vid = _vid_from_thumb(thumb)
+    if vid:
+        url = f"https://www.youtube.com/watch?v={vid}"
+        return url, vid
+    _do_search(title)
+    if not _last_results:
+        return None, None
+    entry, _, _ = _last_results[0]
+    url = entry.get("webpage_url") or entry.get("original_url") or entry.get("url")
+    if not url and entry.get("id"):
+        url = f"https://www.youtube.com/watch?v={entry['id']}"
+    return url, entry.get("id")
+
+
+def act_on_current(action, title, thumb=None):
+    if action == "download":
+        _download_current(title, thumb)
+    else:
+        _like_current(title, thumb)
+
+
+def _download_current(title, thumb):
+    url, vid = _resolve_current(title, thumb)
+    if not url:
+        e("    Could not find the current track online")
+        return
+    vid = vid or _vid_from_thumb(thumb) or ""
+    existing = library.get_download_path(vid) if vid else None
+    if existing:
+        i(f"    Already downloaded: {_truncate_title(title)}")
+        return
+    fmt = config.FORMAT
+    if fmt != "webm" and not config.FFMPEG:
+        fmt = "webm"
+    stop = False
+    t = threading.Thread(
+        target=_spinner,
+        args=(lambda: stop, f"Downloading: {_truncate_title(title)}"),
+        daemon=True,
+    )
+    t.start()
+    try:
+        youtube.download_url(url, config.DOWNLOAD_DIR, fmt=fmt)
+    finally:
+        stop = True
+        t.join()
+    i(f"    Downloaded: {_truncate_title(title)}")
+
+
+def _like_current(title, thumb):
+    url, vid = _resolve_current(title, thumb)
+    if not url:
+        e("    Could not find the current track online")
+        return
+    if not vid:
+        vid = _vid_from_thumb(thumb)
+    video_id = library.key_for(url, vid)
+    if library.is_liked(video_id):
+        library.mark_unliked(video_id)
+        i(f"    Unliked: {_truncate_title(title)}")
+    else:
+        library.mark_liked(video_id, title)
+        i(f"    Liked: {_truncate_title(title)}")
+        if vid:
+            try:
+                library.download_thumbnail(video_id, thumb)
+            except Exception:
+                pass
+            if config.DOWN_ON_LIKE and not library.get_download_path(video_id):
+                _like_autodownload(url, video_id, title)
+
+
 def search(query: str):
-    global _last_results
+    global _last_results, _last_played
     if not query:
         print("Search query required")
         return
@@ -485,10 +645,13 @@ def search(query: str):
     if not _last_results:
         print("No results found")
         return
-    for i, (entry, title, dur) in enumerate(_last_results, 1):
-        mins, secs = divmod(int(dur), 60)
-        uploader = entry.get("uploader", "")
-        m(f"  {i}. {_truncate_title(title)}  ({mins}:{secs:02d}) [{uploader}]")
+    idx = _pick_result(query, allow_skip=True)
+    if idx is None:
+        return
+    entry, title, _ = _last_results[idx]
+    entry = _resolve_entry(entry)
+    _last_played = (entry, title)
+    player.play_entry(entry, title, None)
 
 
 _truncate_title = config._truncate_title

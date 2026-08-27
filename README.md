@@ -63,6 +63,9 @@ uv run main.py
 | `-s`    | Use it shuffle or play random songs                                   |
 | `-r`    | Use it to repeat songs no of time [ -r n ] [ -r ] ( n = no of times ) |
 | `-d`    | Use it to download songs                                              |
+| `--play-off` | Play a song from the local library without going online           |
+| `--radio-off` | Radio from the local library (shuffled, looped) without going online |
+| `--resume`    | Resume the last played track from `~/.flow/status.json`          |
 
 ### Shell Mode
 
@@ -74,6 +77,9 @@ flow -pl never gonna give you up    # play (auto-bg)
 flow -rd daft punk                  # radio (auto-bg)
 flow -sh daft punk                  # search (show results, exit)
 flow -kill                          # kill VLC
+flow --play-off dil                 # play a local song (offline, auto-bg)
+flow --radio-off                    # radio over shuffled local library (auto-bg)
+flow --resume                       # replay last track from status.json (auto-bg)
 ```
 
 Also works with positional commands:

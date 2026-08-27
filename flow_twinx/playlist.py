@@ -561,7 +561,12 @@ def export_m3u(name, out_path=None):
     lines = ["#EXTM3U"]
     for t in tracks:
         dur = int(t.get("duration") or 0)
-        lines.append(f"#EXTINF:{dur},{t.get('title', 'Unknown')}")
+        try:
+            from .config import _truncate_title
+            title = _truncate_title(t.get("title", "Unknown"))
+        except Exception:
+            title = t.get("title", "Unknown")
+        lines.append(f"#EXTINF:{dur},{title}")
         lines.append(t.get("local_path") or t.get("ref", ""))
     out_path = pathlib.Path(out_path)
     out_path.write_text("\n".join(lines) + "\n")

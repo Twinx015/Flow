@@ -12,6 +12,7 @@ dynamic = []
 dependencies = [
     "flask",
     "numpy",
+    "pillow",
     "psutil>=7.2.2",
     "python-vlc",
     "sounddevice",
@@ -27,7 +28,7 @@ where = ["."]
 include = ["flow_twinx*"]
 
 [tool.setuptools.package-data]
-flow_twinx = ["web/templates/*"]
+flow_twinx = ["web/templates/*", "Hyprland/*.qml"]
 
 [dependency-groups]
 dev = [

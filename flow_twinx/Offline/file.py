@@ -39,24 +39,6 @@ def get_songs() -> list[pathlib.Path]:
     return [s for s in get_all_songs() if liked not in s.parents]
 
 
-def get_albums() -> list[str]:
-    if not config.DOWNLOAD_DIR.exists():
-        return []
-    liked = _liked_dir()
-    return sorted(
-        [d.name for d in config.DOWNLOAD_DIR.iterdir() if d.is_dir() and d != liked]
-    )
-
-
-def get_album_songs(album: str) -> list[pathlib.Path]:
-    album_dir = config.DOWNLOAD_DIR / album
-    if not album_dir.exists() or not album_dir.is_dir():
-        return []
-    return sorted(
-        [p for p in album_dir.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS]
-    )
-
-
 def get_liked_songs() -> list[pathlib.Path]:
     liked = _liked_dir()
     if not liked.exists():
@@ -83,6 +65,31 @@ def unlike_song(song_path: pathlib.Path) -> bool:
     return False
 
 
+def delete_file(song_path: pathlib.Path) -> bool:
+    """Remove a local song file (plus same-stem siblings and any liked copy)."""
+    if not song_path.exists():
+        return False
+    stem = song_path.stem
+    removed = False
+    for f in sorted(song_path.parent.glob(f"{stem}*")):
+        if f.is_file():
+            try:
+                f.unlink()
+                removed = True
+            except OSError:
+                pass
+    liked = _liked_dir()
+    if liked.exists():
+        for f in sorted(liked.glob(f"{stem}*")):
+            if f.is_file():
+                try:
+                    f.unlink()
+                    removed = True
+                except OSError:
+                    pass
+    return removed
+
+
 def display_name(song_path: pathlib.Path) -> str:
     return library.title_for_stem(song_path.stem)
 
@@ -96,7 +103,3 @@ def find_songs(query: str) -> list[pathlib.Path]:
 
 def get_song_names() -> list[str]:
     return sorted(set(display_name(s) for s in get_songs()))
-
-
-def get_album_names() -> list[str]:
-    return get_albums()

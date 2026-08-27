@@ -9,7 +9,7 @@ import termios
 import threading
 import time
 
-from .. import help_detail, playlist, plist_cli, shortcuts
+from .. import help_detail, library, playlist, plist_cli, shortcuts
 from ..imports import config, is_connected, merge_flags
 from . import file as lib
 from . import player
@@ -81,6 +81,7 @@ COMMANDS = {
     "list": "List local music library",
     "radio": "Radio mode | shuffle & loop library | Ctrl+C next | Ctrl+Q quit",
     "like": "Like the currently playing song",
+    "delete": "Delete a downloaded song (alias: dl-d)",
     "playlist": "Manage playlists | create add remove list play rename move dup merge sort clear dedupe info export import (alias: plist)",
     "switch": "Switch to Online mode (checks connection)",
     "help": "Show this help message",
@@ -104,10 +105,13 @@ class _Completer:
                 options = [c for c in COMMANDS if c.startswith(text)]
             elif parts[0] == "play":
                 songs = lib.get_song_names()
-                albums = lib.get_album_names()
-                all_names = songs + albums
                 options = sorted(
-                    set(n for n in all_names if n.lower().startswith(text.lower()))
+                    set(n for n in songs if n.lower().startswith(text.lower()))
+                )
+            elif parts[0] in ("delete", "dl-d"):
+                songs = lib.get_song_names()
+                options = sorted(
+                    set(n for n in songs if n.lower().startswith(text.lower()))
                 )
             else:
                 options = []
@@ -146,6 +150,8 @@ def run(cmd: str, extra: list[str], args):
         radio(extra, args)
     elif cmd == "like":
         like_track()
+    elif cmd in ("delete", "dl-d"):
+        delete_song(extra)
     elif cmd in ("playlist", "plist"):
         playlist_cmd(extra, args)
     elif cmd == "switch":
@@ -164,6 +170,26 @@ def run(cmd: str, extra: list[str], args):
         e(f"Unknown command: {cmd}")
 
 
+def _pick_result():
+    if not sys.stdin.isatty():
+        return 0
+    m("  Multiple matches:")
+    for i, p in enumerate(_last_results, 1):
+        m(f"  {i}. {lib.display_name(p)}")
+    while True:
+        try:
+            choice = input(f"{P}Play which track? [1-{len(_last_results)}] {R}").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not choice:
+            return None
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(_last_results):
+                return idx
+        e("    Invalid choice")
+
+
 def play(extra: list[str], args):
     global _last_results, _last_played
     arg = " ".join(extra) if extra else None
@@ -177,10 +203,6 @@ def play(extra: list[str], args):
     elif arg == "all":
         _play_all(args)
         return
-    if arg in lib.get_album_names():
-        _play_album(arg, args)
-        return
-
     if arg.isdigit():
         idx = int(arg) - 1
         if idx < 0 or idx >= len(_last_results):
@@ -196,10 +218,10 @@ def play(extra: list[str], args):
             song_path = results[0]
         else:
             _last_results = results
-            m("Multiple matches:")
-            for i, p in enumerate(results, 1):
-                m(f"  {i}. {lib.display_name(p)}")
-            return
+            idx = _pick_result()
+            if idx is None:
+                return
+            song_path = results[idx]
 
     _last_played = song_path
     if getattr(args, "bg", False):
@@ -219,6 +241,35 @@ def play(extra: list[str], args):
             pass
     else:
         player.play_file(song_path, lib.display_name(song_path), args)
+
+
+def resume(title, args, thumb=None):
+    global _last_played
+    local = None
+    if thumb:
+        try:
+            vid = pathlib.Path(thumb).stem
+            local = library.get_download_path(vid)
+        except Exception:
+            local = None
+    if not local:
+        matches = lib.find_songs(title)
+        if len(matches) == 1:
+            local = matches[0]
+        elif len(matches) > 1:
+            m("Multiple matches for last track:")
+            for i, p in enumerate(matches, 1):
+                m(f"  {i}. {lib.display_name(p)}")
+            return
+    if not local:
+        e("No local copy of the last track found")
+        return
+    fpath = pathlib.Path(local)
+    _last_played = fpath
+    if getattr(args, "bg", False):
+        if not _fork_bg("Resuming"):
+            return
+    player.play_file(fpath, title, args)
 
 
 def _play_liked(args):
@@ -285,38 +336,6 @@ def _play_all(args):
         pass
 
 
-def _play_album(album: str, args):
-    global _last_played
-    songs = lib.get_album_songs(album)
-    if not songs:
-        e(f"No songs found in album '{album}'")
-        return
-    tracks = list(songs)
-    if getattr(args, "shuffle", False):
-        random.shuffle(tracks)
-    repeat = getattr(args, "repeat", False)
-    repeat_count = getattr(args, "repeat_count", 0)
-    iteration = 0
-    if getattr(args, "bg", False):
-        if not _fork_bg(f"Playing album: {album}"):
-            return
-    try:
-        while True:
-            idx = 0
-            while 0 <= idx < len(tracks):
-                song = tracks[idx]
-                _last_played = song
-                player.play_file(song, lib.display_name(song), args)
-                idx += _nav_delta()
-            if not repeat:
-                break
-            iteration += 1
-            if repeat_count > 0 and iteration >= repeat_count:
-                break
-    except KeyboardInterrupt:
-        pass
-
-
 def like_track():
     global _last_played
     if not _last_played:
@@ -333,6 +352,124 @@ def like_track():
             i(f"Liked: {lib.display_name(song_path)}")
         else:
             m(f"{lib.display_name(song_path)} is already liked")
+
+
+def act_on_current(action, title, thumb=None):
+    local = None
+    if thumb:
+        try:
+            vid = pathlib.Path(thumb).stem
+            local = library.get_download_path(vid)
+        except Exception:
+            local = None
+    if not local:
+        matches = lib.find_songs(title)
+        if len(matches) == 1:
+            local = matches[0]
+        elif len(matches) > 1:
+            e(f"    Multiple local matches for '{title}'")
+            return
+    if not local:
+        e(f"    No local copy found for '{title}'")
+        return
+    fpath = pathlib.Path(local)
+    if action == "download":
+        i(f"    Already on device: {lib.display_name(fpath)}")
+        return
+    liked = lib.get_liked_songs()
+    if fpath in liked:
+        lib.unlike_song(fpath)
+        i(f"    Unliked: {lib.display_name(fpath)}")
+    else:
+        dest = lib.like_song(fpath)
+        if dest:
+            i(f"    Liked: {lib.display_name(fpath)}")
+        else:
+            m(f"    {lib.display_name(fpath)} is already liked")
+
+
+def _audio_files(index):
+    return [
+        (_vid, info.get("song"), info.get("title", ""))
+        for _vid, info in index.items()
+        if info.get("song")
+    ]
+
+
+def delete_song(extra):
+    global _last_results
+    arg = " ".join(extra) if extra else None
+    if not arg:
+        e("Usage: delete <name | index>")
+        return
+
+    targets = []
+    if arg.isdigit():
+        idx = int(arg) - 1
+        if idx < 0 or idx >= len(_last_results):
+            e("     Index out of range")
+            return
+        targets.append(_last_results[idx])
+    else:
+        index = library.load()
+        for _vid, path, title in _audio_files(index):
+            q = arg.lower()
+            if (
+                q in (title or "").lower()
+                or q in (_vid or "").lower()
+                or (path and q in pathlib.Path(path).stem.lower())
+            ):
+                targets.append(pathlib.Path(path))
+        for f in lib.find_songs(arg):
+            if f not in targets:
+                targets.append(f)
+
+    if not targets:
+        e(f"     No downloaded song matching '{arg}'")
+        return
+
+    if len(targets) > 1:
+        m("    Multiple matches:")
+        for n, t in enumerate(targets, 1):
+            m(f"      {n}. {_truncate(t)}")
+        try:
+            choice = input(
+                f"{P}Pick a song to delete [1-{len(targets)}] (Enter to cancel): {R}"
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            m("    Cancelled")
+            return
+        if not choice.isdigit():
+            m("    Cancelled")
+            return
+        sel = int(choice) - 1
+        if sel < 0 or sel >= len(targets):
+            e("     Invalid choice")
+            return
+        path = targets[sel]
+    else:
+        path = targets[0]
+
+    try:
+        ans = input(f"{M}Delete '{_truncate(path)}' (y/N)? {R}")
+    except EOFError:
+        return
+    if ans.strip().lower() not in ("y", "yes"):
+        m("    Cancelled")
+        return
+
+    vid = path.stem
+    if library.get_download_path(vid):
+        library.delete(vid)
+    else:
+        lib.delete_file(path)
+    if library.get(vid):
+        library.mark_unliked(vid)
+    i(f"    Deleted: {_truncate(path)}")
+
+
+def _truncate(p):
+    return config._truncate_title(library.title_for_stem(pathlib.Path(p).stem))
 
 
 def playlist_cmd(extra, args=None):
@@ -427,7 +564,6 @@ def search(query: str):
 def list_library():
     global _last_results
     songs = lib.get_songs()
-    albums = lib.get_albums()
     liked = lib.get_liked_songs()
 
     if songs:
@@ -435,15 +571,11 @@ def list_library():
         i("\nSongs:")
         for idx, p in enumerate(songs, 1):
             m(f"  {idx}. {lib.display_name(p)}")
-    if albums:
-        i("\nAlbums:")
-        for a in albums:
-            m(f"  {a}/")
     if liked:
         i("\nLiked Songs:")
         for p in liked:
             m(f"  {lib.display_name(p)}")
-    if not songs and not albums and not liked:
+    if not songs and not liked:
         e("No music in library")
 
 

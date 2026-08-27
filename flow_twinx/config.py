@@ -97,6 +97,7 @@ _VALID_FORMATS = {"opus", "m4a", "mp3", "webm"}
 
 AD_SKIP = True
 SPONSOR_CATEGORIES = ["sponsor", "selfpromo", "intro", "outro"]
+DOWN_ON_LIKE = True
 
 
 def set_format(fmt):
@@ -276,11 +277,8 @@ FILLER_WORDS = _load_filler_words()
 
 
 def _truncate_title(title):
-    title = re.sub(r"[^A-Za-z0-9\s]", "", title)
-
     words = [word for word in title.split() if word.lower() not in FILLER_WORDS]
-
-    return " ".join(words[:4]) + "..." if len(words) > 4 else " ".join(words)
+    return " ".join(words[:6]) + "..." if len(words) > 6 else " ".join(words)
 
 
 def _load_config():
@@ -298,8 +296,11 @@ def _load_config():
         FORMAT, \
         AD_SKIP, \
         SPONSOR_CATEGORIES, \
+        DOWN_ON_LIKE, \
         MAX_SEARCH_RESULTS, \
-        MAX_RESULTS_RADIO
+        MAX_RESULTS_RADIO, \
+        ImgSize, \
+        ImgColors
     if not CONFIG_FILE.exists():
         return
     try:
@@ -348,12 +349,18 @@ def _load_config():
             cats = [c for c in data["sponsor_categories"] if isinstance(c, str)]
             if cats:
                 SPONSOR_CATEGORIES = cats
+        if "down_on_like" in data and isinstance(data["down_on_like"], bool):
+            DOWN_ON_LIKE = data["down_on_like"]
         if "format" in data and data["format"] in _VALID_FORMATS:
             FORMAT = data["format"]
         if "max_search" in data and isinstance(data["max_search"], int) and 1 <= data["max_search"] <= 20:
             MAX_SEARCH_RESULTS = data["max_search"]
         if "max_radio" in data and isinstance(data["max_radio"], int) and 1 <= data["max_radio"] <= 50:
             MAX_RESULTS_RADIO = data["max_radio"]
+        if "img_size" in data and isinstance(data["img_size"], int) and 3 <= data["img_size"] <= 20:
+            ImgSize = data["img_size"]
+        if "img_colors" in data and isinstance(data["img_colors"], int) and 1 <= data["img_colors"] <= 3:
+            ImgColors = data["img_colors"]
     except json.JSONDecodeError, OSError:
         pass
 
@@ -373,9 +380,12 @@ def _save_config():
         "ffmpeg": FFMPEG,
         "ad_skip": AD_SKIP,
         "sponsor_categories": SPONSOR_CATEGORIES,
+        "down_on_like": DOWN_ON_LIKE,
         "format": FORMAT,
         "max_search": MAX_SEARCH_RESULTS,
         "max_radio": MAX_RESULTS_RADIO,
+        "img_size": ImgSize,
+        "img_colors": ImgColors,
     }
     CONFIG_FILE.write_text(json.dumps(data, indent=2))
 
@@ -394,6 +404,9 @@ Mode = "Online"
 
 MAX_RESULTS_RADIO = 35
 MAX_SEARCH_RESULTS = 5
+
+ImgSize = 6
+ImgColors = 1
 
 PID_FILE = pathlib.Path.home() / ".flow/vlc.pid"
 
@@ -445,8 +458,11 @@ def cmd_config(extra: list[str], args=None):
         DEV_MODE, \
         FORMAT, \
         AD_SKIP, \
+        DOWN_ON_LIKE, \
         MAX_SEARCH_RESULTS, \
-        MAX_RESULTS_RADIO
+        MAX_RESULTS_RADIO, \
+        ImgSize, \
+        ImgColors
     if extra and (extra[0] in ("help", "-h")):
         print(f"{Tertiary}Available targets:{Reset}")
         print(f"  {Primary}primary{Reset}   (aliases: pri)")
@@ -459,9 +475,12 @@ def cmd_config(extra: list[str], args=None):
         print(f"  {Grey}sensitivity{Reset} (0.5-5.0, current: {Sensitivity})")
         print(f"  {Grey}format{Reset}     (opus, m4a, mp3, webm — current: {FORMAT})")
         print(f"  {Grey}ad_skip{Reset}     (true/false — SponsorBlock segment skipping, current: {AD_SKIP})")
+        print(f"  {Grey}down_on_like{Reset} (true/false — auto-download when liking online, current: {DOWN_ON_LIKE})")
         print(f"  {Grey}sponsor_categories{Reset} (in config file: sponsor, selfpromo, intro, outro, ...)")
         print(f"  {Grey}max_search{Reset} (1-20, current: {MAX_SEARCH_RESULTS})")
         print(f"  {Grey}max_radio{Reset}  (1-50, current: {MAX_RESULTS_RADIO})")
+        print(f"  {Grey}img_size{Reset}   (3-20, status card image height in rows, current: {ImgSize})")
+        print(f"  {Grey}img_colors{Reset} (1-3, number of colors+swatches shown, current: {ImgColors})")
         print(f"\n{Tertiary}Available colors:{Reset}")
         for name, code in _COLORS.items():
             print(f"  {code}{name}{Reset}")
@@ -582,6 +601,13 @@ def cmd_config(extra: list[str], args=None):
         AD_SKIP = value == "true"
         _save_config()
         print(f"{Tertiary}Sponsor segment skipping set to {AD_SKIP}{Reset}")
+    elif target in ("down_on_like", "downlike"):
+        if value not in ("true", "false"):
+            print("Usage: config down_on_like true/false")
+            return
+        DOWN_ON_LIKE = value == "true"
+        _save_config()
+        print(f"{Tertiary}Auto-download on like set to {DOWN_ON_LIKE}{Reset}")
     elif target in ("max_search", "maxresults"):
         try:
             v = int(extra[1])
@@ -606,6 +632,30 @@ def cmd_config(extra: list[str], args=None):
         MAX_RESULTS_RADIO = v
         _save_config()
         print(f"{Tertiary}Max radio tracks changed to {v}{Reset}")
+    elif target in ("img_size", "imgsize"):
+        try:
+            v = int(extra[1])
+        except ValueError:
+            print("img_size must be an integer (3-20)")
+            return
+        if not (3 <= v <= 20):
+            print("img_size must be between 3 and 20")
+            return
+        ImgSize = v
+        _save_config()
+        print(f"{Tertiary}Status image size changed to {v} rows{Reset}")
+    elif target in ("img_colors", "imgcolors"):
+        try:
+            v = int(extra[1])
+        except ValueError:
+            print("img_colors must be an integer (1-3)")
+            return
+        if not (1 <= v <= 3):
+            print("img_colors must be between 1 and 3")
+            return
+        ImgColors = v
+        _save_config()
+        print(f"{Tertiary}Status color swatches changed to {v}{Reset}")
     else:
         aliases = ", ".join(f"{k}->{v}" for k, v in _TARGET_ALIASES.items())
         print(

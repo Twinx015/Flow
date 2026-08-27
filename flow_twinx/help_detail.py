@@ -136,6 +136,8 @@ def _online_help():
             f"  {M}format{R}     {G}Default download format (opus, m4a, mp3, webm){R}",
             f"  {M}max_search{R} {G}Max YouTube search results (1-20, current: {M}{config.MAX_SEARCH_RESULTS}{G}){R}",
             f"  {M}max_radio{R}  {G}Max radio tracks (1-50, current: {M}{config.MAX_RESULTS_RADIO}{G}){R}",
+            f"  {M}img_size{R}   {G}Status card image height in rows (3-20, current: {M}{config.ImgSize}{G}){R}",
+            f"  {M}img_colors{R} {G}Color swatches shown in status (1-3, current: {M}{config.ImgColors}{G}){R}",
         ],
         "check": [
             f"{T}> check{R}",
@@ -173,6 +175,12 @@ def _online_help():
             f"{G}  Toggle stop/resume on the background VLC or web player.{R}",
             f"{G}  Use from shell: {M}flow --stop{R}",
         ],
+        "resume": [
+            f"{T}> flow --resume{R}",
+            f"{G}  Replay the last played track listed in {M}~/.flow/status.json{R}",
+            f"{G}  Picks online/offline automatically from the thumbnail path.{R}",
+            f"{G}  Use from shell: {M}flow --resume{R}",
+        ],
     }
 
 
@@ -205,7 +213,15 @@ def _offline_help():
         "list": [
             f"{T}> list{R}",
             f"{G}  List your entire music library.{R}",
-            f"{G}  Shows Songs, Albums, and Liked Songs sections.{R}",
+            f"{G}  Shows Songs and Liked Songs sections.{R}",
+        ],
+        "delete": [
+            f"{T}> delete{R} {B}<name | index>{R}",
+            f"{G}  Delete a downloaded song and its library entry.{R}",
+            f"  {B}<name>{R}   {G}Delete by name (pick if multiple match){R}",
+            f"  {B}<index>{R}  {G}Delete by index from last search results{R}",
+            f"  {G}  Removes the file, any liked copy, and the entry in ~/.flow/library.json.{R}",
+            f"  {G}Alias:{R} {B}dl-d{R}",
         ],
         "like": [
             f"{T}> like{R}",
@@ -277,6 +293,8 @@ def _offline_help():
             f"  {B}format{R}     {G}Default download format (opus, m4a, mp3, webm){R}",
             f"  {B}max_search{R} {G}Max YouTube search results (1-20, current: {B}{config.MAX_SEARCH_RESULTS}{G}){R}",
             f"  {B}max_radio{R}  {G}Max radio tracks (1-50, current: {B}{config.MAX_RESULTS_RADIO}{G}){R}",
+            f"  {B}img_size{R}   {G}Status card image height in rows (3-20, current: {B}{config.ImgSize}{G}){R}",
+            f"  {B}img_colors{R} {G}Color swatches shown in status (1-3, current: {B}{config.ImgColors}{G}){R}",
         ],
         "check": [
             f"{T}> check{R}",
@@ -291,6 +309,12 @@ def _offline_help():
             f"{T}> flow --stop{R}",
             f"{G}  Toggle stop/resume on the background VLC or web player.{R}",
             f"{G}  Use from shell: {B}flow --stop{R}",
+        ],
+        "resume": [
+            f"{T}> flow --resume{R}",
+            f"{G}  Replay the last played track listed in {B}~/.flow/status.json{R}",
+            f"{G}  Picks online/offline automatically from the thumbnail path.{R}",
+            f"{G}  Use from shell: {B}flow --resume{R}",
         ],
     }
 

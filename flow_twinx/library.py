@@ -3,6 +3,8 @@ import json
 import pathlib
 import urllib.request
 
+from .config import _truncate_title
+
 LIBRARY_FILE = pathlib.Path.home() / ".flow/library.json"
 THUMB_CACHE = pathlib.Path.home() / ".flow/downloads/.cache"
 
@@ -20,6 +22,9 @@ def load() -> dict:
 
 
 def save(library: dict):
+    for entry in library.values():
+        if isinstance(entry, dict) and entry.get("title"):
+            entry["title"] = _truncate_title(entry["title"])
     LIBRARY_FILE.parent.mkdir(parents=True, exist_ok=True)
     LIBRARY_FILE.write_text(json.dumps(library, indent=2))
 
