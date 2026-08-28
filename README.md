@@ -58,7 +58,7 @@ uv run main.py
 | Flag    | Description                                                           |
 | ------- | --------------------------------------------------------------------- |
 | `-bg`   | Play in background and exit to shell                                  |
-| `-kill` | Kill all background VLC processes                                     |
+| `--stop-all` | Stop all background VLC processes                                     |
 | `-i`    | Use it in help command to show detailed help                          |
 | `-s`    | Use it shuffle or play random songs                                   |
 | `-r`    | Use it to repeat songs no of time [ -r n ] [ -r ] ( n = no of times ) |
