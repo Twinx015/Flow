@@ -185,15 +185,86 @@ def _fetch_more(query, limit):
     return results
 
 
-def _pick_result(query, allow_skip):
+def _fmt_choice(idx, entry, title, dur):
+    mins, secs = divmod(int(dur), 60)
+    uploader = entry.get("uploader", "")
+    label = f"{idx}. {_truncate_title(title)}  ({mins}:{secs:02d})"
+    if uploader:
+        label += f"  [{uploader}]"
+    return label
+
+
+def _style():
+    import questionary
+    from questionary import Style
+
+    return Style(
+        [
+            ("qmark", "fg:cyan bold"),
+            ("question", "fg:cyan bold"),
+            ("answer", f"fg:magenta bold"),
+            ("pointer", f"fg:cyan bold"),
+            ("highlighted", f"fg:magenta bold"),
+            ("selected", f"fg:cyan"),
+            ("instruction", f"fg:blue"),
+            ("text", ""),
+        ]
+    )
+
+
+def _select_result(query, allow_skip):
     global _last_results
     limit = len(_last_results)
+    try:
+        import questionary
+    except ImportError:
+        pass
+    else:
+        if sys.stdin.isatty():
+            while True:
+                choices = []
+                for idx, (entry, title, dur) in enumerate(_last_results, 1):
+                    choices.append(
+                        questionary.Choice(
+                            title=_fmt_choice(idx, entry, title, dur),
+                            value=idx - 1,
+                        )
+                    )
+                more_label = "↻ Load more results"
+                choices.append(questionary.Choice(title=more_label, value="more"))
+                try:
+                    choice = questionary.select(
+                        "Play which track?",
+                        choices=choices,
+                        default=0,
+                        instruction="(↑↓ navigate, Enter to play, Esc to cancel)",
+                        style=_style(),
+                    ).ask()
+                except (KeyboardInterrupt, EOFError):
+                    return None
+                if choice == "more":
+                    if limit >= MAX_PAGE_RESULTS:
+                        e("    No more results")
+                        continue
+                    new_limit = min(limit + PAGE_STEP, MAX_PAGE_RESULTS)
+                    more = _fetch_more(query, new_limit)
+                    if len(more) <= len(_last_results):
+                        e("    No more results")
+                        continue
+                    _last_results = more
+                    limit = len(_last_results)
+                    continue
+                if choice is None:
+                    return None
+                return choice
+
+    # Non-interactive fallback (or questionary unavailable)
+    if not sys.stdin.isatty():
+        return None if allow_skip else 0
     while True:
         _print_results(_last_results)
         hint = "m for more" + (", Enter to skip" if allow_skip else ", default 1")
         prompt = f"Play which track? [1-{len(_last_results)}, {hint}] "
-        if not sys.stdin.isatty():
-            return None if allow_skip else 0
         try:
             choice = input(f"{P}{prompt}{R}").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -216,6 +287,10 @@ def _pick_result(query, allow_skip):
         if not choice:
             return None if allow_skip else 0
         e("    Invalid choice")
+
+
+def _pick_result(query, allow_skip):
+    return _select_result(query, allow_skip)
 
 
 def _choose_result(query, results):
@@ -301,6 +376,8 @@ def play(extra: list[str], args):
             pass
     else:
         idx = _choose_result(arg, _last_results)
+        if idx is None:
+            return
         entry, title, _ = _last_results[idx]
         entry = _resolve_entry(entry)
         _last_played = (entry, title)

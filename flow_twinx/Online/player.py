@@ -1,3 +1,4 @@
+import curses
 import errno
 import fcntl
 import os
@@ -151,7 +152,18 @@ def _display_loop(player, title, video_id=None, stop_check=None):
             m("    No synced lyrics found")
 
     if display == "bars":
-        visualizer.start()
+        stdscr = curses.initscr()
+        curses.noecho()
+        curses.cbreak()
+        curses.curs_set(0)
+        stdscr.keypad(True)
+        if not visualizer.start(stdscr, P):
+            curses.nocbreak()
+            stdscr.keypad(False)
+            curses.echo()
+            curses.curs_set(1)
+            curses.endwin()
+            return
 
     start = time.time()
     last_lyric_line = None
@@ -164,8 +176,16 @@ def _display_loop(player, title, video_id=None, stop_check=None):
                 break
             if _paused:
                 if not paused_printed:
-                    sys.stdout.write(f"\r  {T}[Paused]{R}  ")
-                    sys.stdout.flush()
+                    if display == "bars":
+                        try:
+                            y, x = stdscr.getmaxyx()
+                            stdscr.addstr(0, 0, "  [Paused]  ", curses.A_BOLD)
+                            stdscr.refresh()
+                        except curses.error:
+                            pass
+                    else:
+                        sys.stdout.write(f"\r  {T}[Paused]{R}  ")
+                        sys.stdout.flush()
                     paused_printed = True
                 try:
                     time.sleep(0.1)
@@ -176,9 +196,7 @@ def _display_loop(player, title, video_id=None, stop_check=None):
                 paused_printed = False
             elapsed = time.time() - start
             if display == "bars":
-                bar_str = visualizer.render(color=P, reset=R)
-                sys.stdout.write(f"\r{bar_str}")
-                sys.stdout.flush()
+                visualizer.draw()
             elif display == "lyrics" and fetched_lyrics:
                 line = lyrics.find_line(fetched_lyrics, elapsed)
                 if line and line != last_lyric_line:
@@ -195,8 +213,14 @@ def _display_loop(player, title, video_id=None, stop_check=None):
     finally:
         if display == "bars":
             visualizer.stop()
-        sys.stdout.write("\r" + " " * 60 + "\r\n")
-        sys.stdout.flush()
+            curses.nocbreak()
+            stdscr.keypad(False)
+            curses.echo()
+            curses.curs_set(1)
+            curses.endwin()
+        else:
+            sys.stdout.write("\r" + " " * 60 + "\r\n")
+            sys.stdout.flush()
 
 
 def play_url(url, title, args=None, duration=0, thumbnail=None):

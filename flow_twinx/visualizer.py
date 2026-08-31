@@ -1,3 +1,5 @@
+import curses
+import re
 import threading
 
 import numpy as np
@@ -9,17 +11,46 @@ SAMPLE_RATE = 48000
 MIN_FREQ = 60
 MAX_FREQ = 18000
 
-FULL_CHARS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
-
 _bars = None
 _peak = None
 _stream = None
 _lock = threading.Lock()
+_stdscr = None
+_color_pair = 1
 
 
-def _build_chars(height):
-    n = min(height, len(FULL_CHARS))
-    return FULL_CHARS[:n]
+def _ansi_to_curses_color(ansi_code):
+    basic = {
+        "30": 0, "31": 1, "32": 2, "33": 3,
+        "34": 4, "35": 5, "36": 6, "37": 7,
+        "90": 8, "91": 9, "92": 10, "93": 11,
+        "94": 12, "95": 13, "96": 14, "97": 15,
+    }
+
+    m = re.search(r"38;2;(\d+);(\d+);(\d+)", ansi_code)
+    if m:
+        # Truecolor requires a terminal that supports palette redefinition
+        # and at least 17 color slots. Fall back safely otherwise.
+        if curses.can_change_color() and curses.COLORS > 16:
+            r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            try:
+                curses.init_color(16, r * 1000 // 255, g * 1000 // 255, b * 1000 // 255)
+                return 16
+            except curses.error:
+                pass
+        return 6
+
+    m = re.search(r"38;5;(\d+)", ansi_code)
+    if m:
+        color_num = int(m.group(1))
+        if color_num < curses.COLORS:
+            return color_num
+        return 6
+
+    for code, num in basic.items():
+        if f";{code}m" in ansi_code or ansi_code.endswith(f"{code}m"):
+            return num
+    return 6
 
 
 def _log_bins(nfft, sr, num_bars):
@@ -45,7 +76,10 @@ _bins = _rebuild()
 
 
 def _find_monitor():
-    devices = sd.query_devices()
+    try:
+        devices = sd.query_devices()
+    except Exception:
+        return None
     for i, d in enumerate(devices):
         name = d["name"].lower()
         if "monitor" in name and d["max_input_channels"] > 0:
@@ -94,29 +128,38 @@ def _audio_callback(indata, frames, time_info, status):
         _bars = 0.4 * _bars + 0.6 * normalized
 
 
-def start():
-    global _stream, _bins, _bars, _peak
+def start(stdscr, ansi_color):
+    global _stream, _bins, _bars, _peak, _stdscr
     if _stream is not None:
         return
+    _stdscr = stdscr
+    curses.start_color()
+    curses.use_default_colors()
+    color_num = _ansi_to_curses_color(ansi_color)
+    curses.init_pair(_color_pair, color_num, -1)
     dev = _find_monitor()
     if dev is None:
         return False
     _bars = np.zeros(config.BarWidth)
     _peak = None
     _bins = _log_bins(BLOCK_SIZE, SAMPLE_RATE, config.BarWidth)
-    _stream = sd.InputStream(
-        device=dev,
-        channels=1,
-        samplerate=SAMPLE_RATE,
-        blocksize=BLOCK_SIZE,
-        callback=_audio_callback,
-    )
-    _stream.start()
+    try:
+        _stream = sd.InputStream(
+            device=dev,
+            channels=1,
+            samplerate=SAMPLE_RATE,
+            blocksize=BLOCK_SIZE,
+            callback=_audio_callback,
+        )
+        _stream.start()
+    except Exception:
+        _stream = None
+        return False
     return True
 
 
 def stop():
-    global _stream, _bars, _peak
+    global _stream, _bars, _peak, _stdscr
     if _stream is not None:
         _stream.stop()
         _stream.close()
@@ -124,21 +167,36 @@ def stop():
     with _lock:
         _bars = None
         _peak = None
+    _stdscr = None
 
 
-def render(color="\033[0m", reset="\033[0m"):
+def draw():
+    if _stdscr is None:
+        return
     with _lock:
         if _bars is None:
-            return ""
+            _stdscr.erase()
+            _stdscr.refresh()
+            return
         bars = _bars.copy()
-    chars = _build_chars(config.BarHeight)
-    max_h = len(chars) - 1
-    space = " " * config.get_bar_spacing()
-    line = ""
-    for i, level in enumerate(bars):
-        idx = int(level * max_h)
-        idx = min(idx, max_h)
-        ch = chars[idx]
-        sep = "" if i == len(bars) - 1 else space
-        line += f"{color}{ch}{reset}{sep}"
-    return line
+    max_y, max_x = _stdscr.getmaxyx()
+    bar_height = max(10, min(config.BarHeight, max_y - 2))
+    num_bars = len(bars)
+    spacing = config.get_bar_spacing()
+    bar_col = spacing + 1  # total stride per bar, including its trailing gap
+    _stdscr.erase()
+    for row in range(bar_height):
+        y = max_y - 1 - row
+        for col_idx in range(num_bars):
+            level = bars[col_idx]
+            x = col_idx * bar_col
+            if int(level * bar_height) > row:
+                cell = config.BarChar[:1]
+                attr = curses.color_pair(_color_pair) | curses.A_BOLD
+                if y < max_y and x < max_x:
+                    try:
+                        _stdscr.addstr(y, x, cell, attr)
+                    except curses.error:
+                        pass
+            # Unlit cells: nothing to draw, screen was already erased.
+    _stdscr.refresh()

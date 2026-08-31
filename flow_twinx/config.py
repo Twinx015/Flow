@@ -83,8 +83,9 @@ Tertiary = Blue
 Muted = Grey
 Display = "bars"
 BarWidth = 20
-BarHeight = 10
+BarHeight = 40
 BarSpacing = 1
+BarChar = "\u2588"
 Sensitivity = 1.0
 
 ####### Be carefull this will make everything print on screen including links title view and all things ###
@@ -290,6 +291,7 @@ def _load_config():
         BarWidth, \
         BarHeight, \
         BarSpacing, \
+        BarChar, \
         Sensitivity, \
         DEV_MODE, \
         FFMPEG, \
@@ -322,7 +324,7 @@ def _load_config():
         if (
             "bar_height" in data
             and isinstance(data["bar_height"], int)
-            and 2 <= data["bar_height"] <= 24
+            and 10 <= data["bar_height"] <= 90
         ):
             BarHeight = data["bar_height"]
         if (
@@ -339,6 +341,8 @@ def _load_config():
             and 0.5 <= data["sensitivity"] <= 5.0
         ):
             Sensitivity = data["sensitivity"]
+        if "bar_char" in data and isinstance(data["bar_char"], str) and data["bar_char"]:
+            BarChar = data["bar_char"][:1]
         if "dev" in data and isinstance(data["dev"], bool):
             DEV_MODE = data["dev"]
         if "ffmpeg" in data and isinstance(data["ffmpeg"], bool):
@@ -375,6 +379,7 @@ def _save_config():
         "bar_width": BarWidth,
         "bar_height": BarHeight,
         "bar_spacing": BarSpacing,
+        "bar_char": BarChar,
         "sensitivity": Sensitivity,
         "dev": DEV_MODE,
         "ffmpeg": FFMPEG,
@@ -445,6 +450,94 @@ def kill_stored():
     return True
 
 
+_BAR_CHARS = {"dot": "\u25aa", "block": "\u2588", "circle": "\u2688"}
+
+
+def _apply_color(which, value):
+    global Primary, Secondary, Tertiary
+    color = _COLORS.get(value)
+    if color is None:
+        return f"Unknown color '{value}'. Use 'config -h' to see available colors."
+    if which == "primary":
+        Primary = _COLORS[value]
+    elif which == "secondary":
+        Secondary = _COLORS[value]
+    else:
+        Tertiary = _COLORS[value]
+    _save_config()
+    code = {"primary": Primary, "secondary": Secondary, "tertiary": Tertiary}[which]
+    return f"{code}{which.capitalize()} color changed to {value}{Reset}"
+
+
+def _apply_display(value):
+    global Display
+    if value not in _DISPLAY_MODES:
+        return f"Unknown display mode '{value}'. Options: none, bars, lyrics"
+    Display = value
+    _save_config()
+    return f"{Tertiary}Display mode changed to {value}{Reset}"
+
+
+def _apply_bar_width(v):
+    global BarWidth
+    BarWidth = v
+    _save_config()
+    return f"{Tertiary}Bar width changed to {v}{Reset}"
+
+
+def _apply_bar_height(v):
+    global BarHeight
+    BarHeight = v
+    _save_config()
+    return f"{Tertiary}Bar height changed to {v}{Reset}"
+
+
+def _apply_bar_spacing(v):
+    global BarSpacing
+    BarSpacing = v
+    _save_config()
+    return f"{Tertiary}Bar spacing changed to {v}{Reset}"
+
+
+def _apply_bar_char(v):
+    global BarChar
+    char = _BAR_CHARS.get(str(v).lower(), v)
+    BarChar = str(char)[:1]
+    _save_config()
+    return f"{Tertiary}Bar char changed to {BarChar}{Reset}"
+
+
+def _apply_sensitivity(v):
+    global Sensitivity
+    Sensitivity = v
+    _save_config()
+    return f"{Tertiary}Sensitivity changed to {v}{Reset}"
+
+
+def _apply_format(value):
+    if not set_format(value):
+        if value not in _VALID_FORMATS:
+            return f"Unknown format '{value}'. Options: opus, m4a, mp3, webm"
+        return (
+            f"{YELLOW}ffmpeg not found. Install ffmpeg to use {value} format.{Reset}\n"
+            f"{Grey}  Keeping current format: {FORMAT}{Reset}"
+        )
+    return f"{Tertiary}Default download format changed to {value}{Reset}"
+
+
+def _apply_int(attr, value, lo, hi, ok_msg):
+    global BarWidth, BarHeight, BarSpacing, MAX_SEARCH_RESULTS, MAX_RESULTS_RADIO, ImgSize, ImgColors
+    try:
+        v = int(value)
+    except ValueError:
+        return f"{attr} must be an integer ({lo}-{hi})"
+    if not (lo <= v <= hi):
+        return f"{attr} must be between {lo} and {hi}"
+    globals()[attr] = v
+    _save_config()
+    return f"{Tertiary}{ok_msg} to {v}{Reset}"
+
+
 def cmd_config(extra: list[str], args=None):
     global \
         Primary, \
@@ -454,6 +547,7 @@ def cmd_config(extra: list[str], args=None):
         BarWidth, \
         BarHeight, \
         BarSpacing, \
+        BarChar, \
         Sensitivity, \
         DEV_MODE, \
         FORMAT, \
@@ -470,8 +564,9 @@ def cmd_config(extra: list[str], args=None):
         print(f"  {Tertiary}tertiary{Reset}  (aliases: ter)")
         print(f"  {Grey}display{Reset}    (none, bars, lyrics)")
         print(f"  {Grey}barwidth{Reset}   (4-80, current: {BarWidth})")
-        print(f"  {Grey}barheight{Reset}  (2-24, current: {BarHeight})")
+        print(f"  {Grey}barheight{Reset}  (10-90, current: {BarHeight})")
         print(f"  {Grey}barspacing{Reset} (0-4, min, fit, max — current: {BarSpacing})")
+        print(f"  {Grey}barchar{Reset}    (dot, block, circle, or any single char — current: {BarChar})")
         print(f"  {Grey}sensitivity{Reset} (0.5-5.0, current: {Sensitivity})")
         print(f"  {Grey}format{Reset}     (opus, m4a, mp3, webm — current: {FORMAT})")
         print(f"  {Grey}ad_skip{Reset}     (true/false — SponsorBlock segment skipping, current: {AD_SKIP})")
@@ -487,95 +582,46 @@ def cmd_config(extra: list[str], args=None):
         print(f"\n{Grey}Config file: {CONFIG_FILE}{Reset}")
         return
     if not extra:
-        print(f"{Primary}Usage: config <target> <value>{Reset}")
-        print(f"       config -h{Reset}")
+        _interactive_config()
         return
     if len(extra) < 2:
         print(f"Usage: config <target> <value>{Reset}")
         return
     target = _TARGET_ALIASES.get(extra[0].lower(), extra[0].lower())
     value = extra[1].lower()
+
+    def emit(msg):
+        print(msg)
+
     if target == "primary":
-        if value not in _COLORS:
-            print(f"Unknown color '{value}'. Use 'config -h' to see available colors.")
-            return
-        Primary = _COLORS[value]
-        _save_config()
-        print(f"{Primary}Primary color changed to {value}{Reset}")
+        emit(_apply_color("primary", value))
     elif target == "secondary":
-        if value not in _COLORS:
-            print(f"Unknown color '{value}'. Use 'config -h' to see available colors.")
-            return
-        Secondary = _COLORS[value]
-        _save_config()
-        print(f"{Secondary}Secondary color changed to {value}{Reset}")
+        emit(_apply_color("secondary", value))
     elif target == "tertiary":
-        if value not in _COLORS:
-            print(f"Unknown color '{value}'. Use 'config -h' to see available colors.")
-            return
-        Tertiary = _COLORS[value]
-        _save_config()
-        print(f"{Tertiary}Tertiary color changed to {value}{Reset}")
+        emit(_apply_color("tertiary", value))
     elif target == "display":
-        if value not in _DISPLAY_MODES:
-            print(f"Unknown display mode '{value}'. Options: none, bars, lyrics")
-            return
-        Display = value
-        _save_config()
-        print(f"{Tertiary}Display mode changed to {value}{Reset}")
+        emit(_apply_display(value))
     elif target in ("barwidth", "width"):
-        try:
-            v = int(extra[1])
-        except ValueError:
-            print("barwidth must be an integer (4-80)")
-            return
-        if not (4 <= v <= 80):
-            print("barwidth must be between 4 and 80")
-            return
-        BarWidth = v
-        _save_config()
-        print(f"{Tertiary}Bar width changed to {v}{Reset}")
+        print(_apply_int("BarWidth", value, 4, 80, "Bar width changed"))
     elif target in ("barheight", "height"):
-        try:
-            v = int(extra[1])
-        except ValueError:
-            print("barheight must be an integer (2-24)")
-            return
-        if not (2 <= v <= 24):
-            print("barheight must be between 2 and 24")
-            return
-        BarHeight = v
-        _save_config()
-        print(f"{Tertiary}Bar height changed to {v}{Reset}")
+        print(_apply_int("BarHeight", value, 10, 90, "Bar height changed"))
     elif target in ("barspacing", "spacing"):
         if value in _BAR_SPACING:
-            BarSpacing = value
-            _save_config()
-            print(f"{Tertiary}Bar spacing changed to {value}{Reset}")
+            print(_apply_bar_spacing(value))
         else:
-            try:
-                v = int(extra[1])
-            except ValueError:
-                print("barspacing must be 0-4, min, fit, or max")
-                return
-            if not (0 <= v <= 4):
-                print("barspacing must be between 0 and 4")
-                return
-            BarSpacing = v
-            _save_config()
-            print(f"{Tertiary}Bar spacing changed to {v}{Reset}")
+            print(_apply_int("BarSpacing", value, 0, 4, "Bar spacing changed"))
     elif target == "sensitivity":
         try:
-            v = float(extra[1])
+            v = float(value)
         except ValueError:
             print("sensitivity must be a number (0.5-5.0)")
             return
         if not (0.5 <= v <= 5.0):
             print("sensitivity must be between 0.5 and 5.0")
             return
-        Sensitivity = v
-        _save_config()
-        print(f"{Tertiary}Sensitivity changed to {v}{Reset}")
+        print(_apply_sensitivity(v))
+    elif target in ("barchar", "bar_char"):
+        print(_apply_bar_char(value))
     elif target == "dev":
         if value not in ("true", "false"):
             print("Usage: config dev true/false")
@@ -584,16 +630,7 @@ def cmd_config(extra: list[str], args=None):
         _save_config()
         print(f"{Tertiary}Dev mode set to {DEV_MODE}{Reset}")
     elif target == "format":
-        if not set_format(value):
-            if value not in _VALID_FORMATS:
-                print(f"Unknown format '{value}'. Options: opus, m4a, mp3, webm")
-            else:
-                print(
-                    f"{YELLOW}ffmpeg not found. Install ffmpeg to use {value} format.{Reset}\n"
-                    f"{Grey}  Keeping current format: {FORMAT}{Reset}"
-                )
-            return
-        print(f"{Tertiary}Default download format changed to {value}{Reset}")
+        print(_apply_format(value))
     elif target == "ad_skip":
         if value not in ("true", "false"):
             print("Usage: config ad_skip true/false")
@@ -609,58 +646,209 @@ def cmd_config(extra: list[str], args=None):
         _save_config()
         print(f"{Tertiary}Auto-download on like set to {DOWN_ON_LIKE}{Reset}")
     elif target in ("max_search", "maxresults"):
-        try:
-            v = int(extra[1])
-        except ValueError:
-            print("max_search must be an integer (1-20)")
-            return
-        if not (1 <= v <= 20):
-            print("max_search must be between 1 and 20")
-            return
-        MAX_SEARCH_RESULTS = v
-        _save_config()
-        print(f"{Tertiary}Max search results changed to {v}{Reset}")
+        print(_apply_int("MAX_SEARCH_RESULTS", value, 1, 20, "Max search results changed"))
     elif target in ("max_radio", "maxradio"):
-        try:
-            v = int(extra[1])
-        except ValueError:
-            print("max_radio must be an integer (1-50)")
-            return
-        if not (1 <= v <= 50):
-            print("max_radio must be between 1 and 50")
-            return
-        MAX_RESULTS_RADIO = v
-        _save_config()
-        print(f"{Tertiary}Max radio tracks changed to {v}{Reset}")
+        print(_apply_int("MAX_RESULTS_RADIO", value, 1, 50, "Max radio tracks changed"))
     elif target in ("img_size", "imgsize"):
-        try:
-            v = int(extra[1])
-        except ValueError:
-            print("img_size must be an integer (3-20)")
-            return
-        if not (3 <= v <= 20):
-            print("img_size must be between 3 and 20")
-            return
-        ImgSize = v
-        _save_config()
-        print(f"{Tertiary}Status image size changed to {v} rows{Reset}")
+        print(_apply_int("ImgSize", value, 3, 20, "Status image size changed"))
     elif target in ("img_colors", "imgcolors"):
-        try:
-            v = int(extra[1])
-        except ValueError:
-            print("img_colors must be an integer (1-3)")
-            return
-        if not (1 <= v <= 3):
-            print("img_colors must be between 1 and 3")
-            return
-        ImgColors = v
-        _save_config()
-        print(f"{Tertiary}Status color swatches changed to {v}{Reset}")
+        print(_apply_int("ImgColors", value, 1, 3, "Status color swatches changed"))
     else:
         aliases = ", ".join(f"{k}->{v}" for k, v in _TARGET_ALIASES.items())
         print(
             f"Unknown target '{target}'. Use: primary, sec, ter, display ({aliases}){Reset}"
         )
+
+
+def _interactive_config():
+    global AD_SKIP, DOWN_ON_LIKE
+    try:
+        import questionary
+        from questionary import Style
+    except ImportError:
+        print(f"{Primary}Usage: config <target> <value>{Reset}")
+        print(f"       config -h{Reset}")
+        print(f"{Grey}  (interactive mode requires 'questionary', install with: pip install questionary){Reset}")
+        return
+
+    color_names = sorted(_COLORS.keys())
+    color_choices = [questionary.Choice(title=n, value=n) for n in color_names]
+    py_style = Style(
+        [
+            ("qmark", "fg:cyan bold"),
+            ("question", "fg:cyan bold"),
+            ("answer", f"fg:{_cname(Secondary)} bold"),
+            ("pointer", f"fg:{_cname(Primary)} bold"),
+            ("highlighted", f"fg:{_cname(Primary)} bold"),
+            ("selected", f"fg:{_cname(Primary)}"),
+            ("separator", f"fg:{_cname(Muted)}"),
+            ("instruction", f"fg:{_cname(Tertiary)}"),
+            ("text", ""),
+        ]
+    )
+
+    questions = [
+        {
+            "type": "select",
+            "name": "display",
+            "message": "Display mode",
+            "choices": ["none", "bars", "lyrics"],
+            "default": Display,
+        },
+        {
+            "type": "select",
+            "name": "primary",
+            "message": "Primary color",
+            "choices": color_choices,
+            "default": _COLOR_NAMES.get(Primary, "cyan"),
+        },
+        {
+            "type": "select",
+            "name": "secondary",
+            "message": "Secondary color",
+            "choices": color_choices,
+            "default": _COLOR_NAMES.get(Secondary, "purple"),
+        },
+        {
+            "type": "select",
+            "name": "tertiary",
+            "message": "Tertiary color",
+            "choices": color_choices,
+            "default": _COLOR_NAMES.get(Tertiary, "blue"),
+        },
+        {
+            "type": "select",
+            "name": "format",
+            "message": "Default download format",
+            "choices": sorted(_VALID_FORMATS),
+            "default": FORMAT if FORMAT in _VALID_FORMATS else "webm",
+        },
+        {
+            "type": "text",
+            "name": "bar_width",
+            "message": "Bar width (4-80)",
+            "default": str(BarWidth),
+            "when": lambda a: a["display"] == "bars",
+        },
+        {
+            "type": "text",
+            "name": "bar_height",
+            "message": "Bar height (10-90)",
+            "default": str(BarHeight),
+            "when": lambda a: a["display"] == "bars",
+        },
+        {
+            "type": "select",
+            "name": "bar_spacing",
+            "message": "Bar spacing",
+            "choices": ["min", "fit", "max", "0", "1", "2", "3", "4"],
+            "default": str(BarSpacing),
+            "when": lambda a: a["display"] == "bars",
+        },
+        {
+            "type": "text",
+            "name": "bar_char",
+            "message": "Bar char (dot/block/circle or single char)",
+            "default": _BC_NAME(BarChar),
+            "when": lambda a: a["display"] == "bars",
+        },
+        {
+            "type": "text",
+            "name": "sensitivity",
+            "message": "Sensitivity (0.5-5.0)",
+            "default": str(Sensitivity),
+            "when": lambda a: a["display"] == "bars",
+        },
+        {
+            "type": "confirm",
+            "name": "ad_skip",
+            "message": "Sponsor segment skipping (ad skip)",
+            "default": AD_SKIP,
+        },
+        {
+            "type": "confirm",
+            "name": "down_on_like",
+            "message": "Auto-download when liking online",
+            "default": DOWN_ON_LIKE,
+        },
+        {
+            "type": "text",
+            "name": "max_search",
+            "message": "Max search results (1-20)",
+            "default": str(MAX_SEARCH_RESULTS),
+        },
+        {
+            "type": "text",
+            "name": "max_radio",
+            "message": "Max radio tracks (1-50)",
+            "default": str(MAX_RESULTS_RADIO),
+        },
+        {
+            "type": "text",
+            "name": "img_size",
+            "message": "Status image size in rows (3-20)",
+            "default": str(ImgSize),
+        },
+        {
+            "type": "text",
+            "name": "img_colors",
+            "message": "Status image color swatches (1-3)",
+            "default": str(ImgColors),
+        },
+    ]
+
+    try:
+        answers = questionary.prompt(questions, style=py_style)
+    except KeyboardInterrupt:
+        print(f"\n{Grey}Config setup cancelled.{Reset}")
+        return
+    if not answers:
+        print(f"\n{Grey}Config setup cancelled.{Reset}")
+        return
+
+    print(_apply_display(answers["display"]))
+    print(_apply_color("primary", answers["primary"]))
+    print(_apply_color("secondary", answers["secondary"]))
+    print(_apply_color("tertiary", answers["tertiary"]))
+
+    bar_width_v = int(answers["bar_width"]) if answers["bar_width"].strip() and answers["display"] == "bars" else None
+    if bar_width_v is not None and 4 <= bar_width_v <= 80:
+        print(_apply_bar_width(bar_width_v))
+    bar_height_v = int(answers["bar_height"]) if answers["bar_height"].strip() and answers["display"] == "bars" else None
+    if bar_height_v is not None and 10 <= bar_height_v <= 90:
+        print(_apply_bar_height(bar_height_v))
+    if answers["display"] == "bars":
+        if str(answers["bar_spacing"]) in _BAR_SPACING:
+            print(_apply_bar_spacing(answers["bar_spacing"]))
+        else:
+            print(_apply_bar_spacing(int(answers["bar_spacing"])))
+        print(_apply_bar_char(answers["bar_char"]))
+        sens_v = float(answers["sensitivity"]) if answers["sensitivity"].strip() else None
+        if sens_v is not None and 0.5 <= sens_v <= 5.0:
+            print(_apply_sensitivity(sens_v))
+
+    print(_apply_format(answers["format"]))
+    print(_apply_int("MAX_SEARCH_RESULTS", answers["max_search"], 1, 20, "Max search results changed"))
+    print(_apply_int("MAX_RESULTS_RADIO", answers["max_radio"], 1, 50, "Max radio tracks changed"))
+    print(_apply_int("ImgSize", answers["img_size"], 3, 20, "Status image size changed"))
+    print(_apply_int("ImgColors", answers["img_colors"], 1, 3, "Status color swatches changed"))
+    AD_SKIP = answers["ad_skip"]
+    DOWN_ON_LIKE = answers["down_on_like"]
+    _save_config()
+    print(f"{Tertiary}Ad skip set to {AD_SKIP}{Reset}")
+    print(f"{Tertiary}Auto-download on like set to {DOWN_ON_LIKE}{Reset}")
+    print(f"\n{Grey}Config saved.{Reset}")
+
+
+def _cname(ansi_code):
+    return _COLOR_NAMES.get(ansi_code, "white")
+
+
+def _BC_NAME(char):
+    for name, code in _BAR_CHARS.items():
+        if code == char:
+            return name
+    return char
 
 
 _load_config()
