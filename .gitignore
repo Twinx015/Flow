@@ -5,6 +5,5 @@ __pycache__
 dist
 *.egg*
 build
-*.spec
 flow
 opencode*

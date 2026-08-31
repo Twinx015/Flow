@@ -1,0 +1,38 @@
+name: Release Flow
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release Flow
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Build Flow
+        run: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            uv sync --group dev
+            uv run pyinstaller flow.spec
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "Flow ${{ github.ref_name }}" \
+            --generate-notes \
+            "dist/flow#flow-${{ github.ref_name }}"
