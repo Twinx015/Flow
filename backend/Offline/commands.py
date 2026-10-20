@@ -184,6 +184,8 @@ def run(cmd: str, extra: list[str], args):
         play(extra, args)
     elif cmd == "search":
         search(" ".join(extra) if extra else "")
+    elif cmd == "import":
+        e("Import needs online mode — run `switch` first")
     elif cmd == "list":
         list_library()
     elif cmd in ("radio", "rd"):

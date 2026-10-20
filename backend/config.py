@@ -652,6 +652,9 @@ def extract_song(title):
 
 
 def _truncate_title(title):
+    """Tile-clean plain-YouTube titles; YouTube Music titles are kept as-is."""
+    if SearchSource != "youtube":
+        return title or ""
     words = extract_song(title).split()
     result = " ".join(words[:MAX_WORDS])
     return result + "..." if len(words) > MAX_WORDS else result
@@ -682,6 +685,8 @@ def _load_config():
         DOWN_ON_LIKE, \
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO, \
+        SearchSource, \
+        ApiUrl, \
         NOTIFY, \
         ProgressColumns
     if not CONFIG_FILE.exists():
@@ -797,6 +802,10 @@ def _load_config():
             and 1 <= data["max_radio"] <= 50
         ):
             MAX_RESULTS_RADIO = data["max_radio"]
+        if data.get("search_source") in ("youtube", "ytmusic"):
+            SearchSource = data["search_source"]
+        if isinstance(data.get("api_url"), str):
+            ApiUrl = data["api_url"].strip()
     except (json.JSONDecodeError, OSError):
         pass
 
@@ -828,6 +837,8 @@ def _save_config():
         "format": FORMAT,
         "max_search": MAX_SEARCH_RESULTS,
         "max_radio": MAX_RESULTS_RADIO,
+        "search_source": SearchSource,
+        "api_url": ApiUrl,
     }
     CONFIG_FILE.write_text(json.dumps(data, indent=2))
 
@@ -846,6 +857,8 @@ Mode = "Online"
 
 MAX_RESULTS_RADIO = 35
 MAX_SEARCH_RESULTS = 5
+SearchSource = "ytmusic"
+ApiUrl = ""
 
 PID_FILE = pathlib.Path.home() / ".flow/vlc.pid"
 SEEK_FILE = pathlib.Path.home() / ".flow/seek.txt"
@@ -1163,6 +1176,18 @@ def _apply_theme(name):
     return f"{Tertiary}Theme changed to '{name}'{Reset}"
 
 
+def _apply_api(value):
+    """`api_url` — push target for /now and /summary; empty disables."""
+    global ApiUrl
+    value = str(value or "").strip()
+    if value and not value.startswith(("http://", "https://")):
+        return f"{RED}api must be an http(s) URL (or empty to disable){Reset}"
+    ApiUrl = value
+    _save_config()
+    label = f"set to {value}" if value else "disabled"
+    return f"{Tertiary}API push {label}{Reset}"
+
+
 def _apply_format(value):
     if not set_format(value):
         if value not in _VALID_FORMATS:
@@ -1197,6 +1222,7 @@ PLUGIN_SAFE_KEYS = {
     "ad_skip",
     "down_on_like",
     "notify",
+    "api",
 }
 
 
@@ -1271,6 +1297,8 @@ def apply_config(key, value):
         )
     if target in ("max_radio", "maxradio"):
         return _apply_int("MAX_RESULTS_RADIO", value, 1, 50, "Max radio tracks changed")
+    if target == "api":
+        return _apply_api(value)
     return f"Unknown config key '{key}'"
 
 
@@ -1308,6 +1336,9 @@ def config_get(key):
         "notify": lambda: NOTIFY,
         "max_search": lambda: MAX_SEARCH_RESULTS,
         "max_radio": lambda: MAX_RESULTS_RADIO,
+        "search_source": lambda: SearchSource,
+        "api": lambda: ApiUrl,
+        "api_url": lambda: ApiUrl,
     }
     getter = getters.get(target)
     if getter is None:
@@ -1347,6 +1378,7 @@ def cmd_config(extra: list[str], args=None):
         DOWN_ON_LIKE, \
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO, \
+        SearchSource, \
         NOTIFY
     if extra and (extra[0] in ("help", "-h")):
         print(f"{Tertiary}Available targets:{Reset}")
@@ -1398,6 +1430,14 @@ def cmd_config(extra: list[str], args=None):
         )
         print(f"  {GREY}max_search{Reset} (1-20, current: {MAX_SEARCH_RESULTS})")
         print(f"  {GREY}max_radio{Reset}  (1-50, current: {MAX_RESULTS_RADIO})")
+        print(
+            f"  {GREY}search_source{Reset} (youtube/ytmusic — youtube searches yt-dlp and "
+            f"Tile-truncates titles; ytmusic keeps them as-is, current: {SearchSource})"
+        )
+        print(
+            f"  {GREY}api{Reset}         (http(s) URL that flow POSTs /now and /summary "
+            f"play state to; empty disables, current: {ApiUrl or 'disabled'})"
+        )
         print(
             f"\n{Tertiary}Available colors (any rich style: named color, #hex, rgb(r,g,b), bold/italic):{Reset}"
         )
@@ -1498,6 +1538,27 @@ def cmd_config(extra: list[str], args=None):
         )
     elif target in ("max_radio", "maxradio"):
         print(_apply_int("MAX_RESULTS_RADIO", value, 1, 50, "Max radio tracks changed"))
+    elif target in ("search_source", "searchsource"):
+        if value not in ("youtube", "ytmusic"):
+            print("Usage: config search_source youtube/ytmusic")
+            return
+        SearchSource = value
+        _save_config()
+        print(f"{Tertiary}Search source set to {SearchSource}{Reset}")
+        try:
+            from backend import logger
+
+            logger.info(
+                "system",
+                "config_change",
+                f"Search source set to {SearchSource}",
+                {"search_source": SearchSource},
+            )
+        except Exception:
+            pass
+    elif target in ("api", "api_url", "apiurl"):
+        raw = extra[1] if len(extra) > 1 else value
+        print(_apply_api(raw))
     elif target == "theme":
         print(_apply_theme(value))
     elif target == "spinner":

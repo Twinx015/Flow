@@ -7,6 +7,7 @@ import threading
 import time
 
 from backend import (
+    api,
     config,
     help_detail,
     ipc,
@@ -103,6 +104,7 @@ def _nav_delta():
 COMMANDS = {
     "play": "Play a song from YouTube",
     "search": "Search YouTube for tracks",
+    "import": "Import CSV/m3u/txt list | flow --import FILE (playlist / download / play)",
     "savan": "Play a song from JioSaavn (alias: svn)",
     "savan-s": "Search JioSaavn for tracks (alias: svn-s)",
     "radio": "Generate a mix | radio <song> [index] | -p save as playlist | -d download",
@@ -145,6 +147,10 @@ def run(cmd: str, extra: list[str], args):
         play(extra, args)
     elif cmd == "search":
         search(" ".join(extra) if extra else "", args)
+    elif cmd == "import":
+        from backend import import_file
+
+        import_file.run(extra, args)
     elif cmd in ("savan", "svn"):
         savan_cmd(extra, args)
     elif cmd in ("savan-s", "svn-s"):
@@ -434,6 +440,7 @@ def play(extra: list[str], args):
     if config.kill_stored():
         print(f"{P}Stopped VLC{R}")
     _clear_all_nav()
+    api.set_playlist("")
     global _last_results, _last_played
     arg = " ".join(extra) if extra else None
     if not arg:
@@ -1489,6 +1496,7 @@ def playlist_cmd(extra, args):
     def play(actual, tracks, args):
         global _last_played
         tracks = list(tracks)
+        api.set_playlist(actual)
         if getattr(args, "shuffle", False):
             random.shuffle(tracks)
         repeat = getattr(args, "repeat", False)
@@ -1549,6 +1557,8 @@ def playlist_cmd(extra, args):
                     break
         except KeyboardInterrupt, _StopPlayback:
             pass
+        finally:
+            api.set_playlist("")
 
     def list_liked():
         liked = library.get_liked_entries()

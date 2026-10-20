@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from backend import history, library
+from backend import config, history, library
 
 
 @pytest.fixture(autouse=True)
@@ -120,12 +120,21 @@ def test_mutate_rollback_when_mutation_declines(song):
     assert library.is_liked(song) is True
 
 
-def test_titles_are_cleaned_on_write(song):
+def test_titles_are_cleaned_on_write(song, monkeypatch):
     """`config._truncate_title` drops filler words and caps at six words."""
+    monkeypatch.setattr(config, "SearchSource", "youtube")
     library.mark_liked(song, "One Two Three Four Five Six Seven Eight")
     assert library.get(song)["title"] == "One Two Three Four Five Six..."
     library.mark_liked("filler-" + song, "Around the World Official Music Video")
     assert library.get("filler-" + song)["title"] == "Around the World"
+
+
+def test_ytmusic_titles_are_kept_as_is(song, monkeypatch):
+    """YouTube Music titles are already clean, so writes keep them untouched."""
+    monkeypatch.setattr(config, "SearchSource", "ytmusic")
+    title = "Don't Worry (feat. Gurlez Akhtar)"
+    library.mark_liked("music-" + song, title)
+    assert library.get("music-" + song)["title"] == title
 
 
 def test_rename_replaces_the_shown_title(song):

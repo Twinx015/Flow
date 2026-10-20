@@ -103,12 +103,18 @@ directory. In `DEV_MODE` it injects Flask/Werkzeug logging into the rotating
 
 ### Lookup pipeline
 
+All YouTube fetches go through `backend.Online.youtube` (no own yt-dlp
+calls), so `config.SearchSource` decides the search backend and title
+cleanup here too.
+
 - `_entry_to_dict()` normalizes an yt-dlp entry into `{title, video_id,
   stream_url, thumbnail, channel, duration, segments}`. Thumbnails are
   upgraded to `maxresdefault` when available.
-- **Search cache** — `_cached_search()` keeps the last 50 queries in memory.
-- **Play cache** — `_get_full_entry()` caches full entries for 20 minutes,
-  triggering a background SponsorBlock segment fetch (`_ensure_segments`).
+- **Search cache** — `_cached_search()` wraps `youtube.search()` and keeps
+  the last 50 queries in memory.
+- **Play cache** — `_get_full_entry()` caches `youtube.get_entry()` results
+  for 20 minutes, triggering a background SponsorBlock segment fetch
+  (`_ensure_segments`).
 - **Segment cache** — segments are cached 20 minutes; each video fetches
   once (a `_seg_inflight` set prevents duplicate concurrent fetches).
 
@@ -123,7 +129,7 @@ directory. In `DEV_MODE` it injects Flask/Werkzeug logging into the rotating
 | `GET /api/segments` | SponsorBlock segments for a video |
 | `GET /api/lyrics` | Lyrics for a track (`video_id`/`title`/`artist`/`duration`, `fresh=1` refetches) |
 | `GET /offline` | Scan `~/.flow/downloads/` for local songs, ascending by display name |
-| `POST /download` | Download audio (`save_dir`, `format`), 3 attempts, registers in library + thumbnail + notify |
+| `POST /download` | Download audio (`save_dir`, `format`) via `youtube.download_url`, registers in library + thumbnail + notify |
 | `GET /api/is-downloaded`, `/api/downloaded-ids` | Library download state |
 | `GET /api/library` | Full library listing (liked/downloaded/speed_dial flags) |
 | `POST /api/library/rename` | Pin a display name (`video_id`, `title`) — 400 on either missing |
@@ -144,9 +150,10 @@ directory. In `DEV_MODE` it injects Flask/Werkzeug logging into the rotating
 | `GET /thumb/<video_id>` | Cached thumbnail |
 | `GET/POST /api/settings` | Web settings persisted to `web_ui.json`, format via `config.set_format` |
 
-Downloads go through `_download_audio()`: yt-dlp with sponsor
-post-processors, optional `FFmpegExtractAudio` for non-webm formats,
-retries, then `library.track_download()` + `download_thumbnail()`.
+Downloads go through `_download_audio()`, a thin wrapper over
+`youtube.download_url()` (sponsor post-processors, optional
+`FFmpegExtractAudio` for non-webm formats, then `library.track_download()` +
+`download_thumbnail()` + notification in the backend).
 
 ### History panel
 

@@ -6,10 +6,10 @@ import pathlib
 import threading
 import time
 
-import yt_dlp
 from flask import Flask, jsonify, render_template, request, send_file
 
 from backend import config, control, history, library, lyrics, playlist, sponsor, status
+from backend.Online import youtube
 from web import devlog
 
 logger = logging.getLogger(__name__)
@@ -91,27 +91,9 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 SEARCH_CACHE_MAX = 50
 _search_cache = {}
 
-BASE_OPTS = {
-    "quiet": True,
-    "no_warnings": True,
-    "noprogress": True,
-    "noplaylist": True,
-    "format": "bestaudio/best",
-    "skip_download": True,
-    "socket_timeout": 10,
-    "retries": 2,
-    "extractor_retries": 2,
-    "js_runtimes": {"node": {}},
-    "extractor_args": {"youtube": {"player_client": ["android"]}},
-}
-
-_ydl_search = {**BASE_OPTS, "default_search": "ytsearch1", "extract_flat": True}
-_ydl_entry = {**BASE_OPTS}
-_ydl_radio = {**BASE_OPTS, "noplaylist": False, "extract_flat": True}
-
 
 def _get_stream_url(entry):
-    return sponsor.stream_url(entry)
+    return sponsor.stream_url(entry) or entry.get("webpage_url") or ""
 
 
 def _full_res_thumbnail(url):
@@ -149,24 +131,9 @@ def _cached_search(query, limit):
     key = f"{query}:{limit}"
     if key in _search_cache:
         return _search_cache[key]
-    results = []
-    try:
-        with yt_dlp.YoutubeDL(_ydl_search) as ydl:
-            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-            entries = info.get("entries", []) if info else []
-            results = [_entry_to_dict(e) for e in entries if e]
-    except Exception as exc:
-        logger.warning("Search failed for %r: %s", query, exc)
-        devlog.log_error("FETCH", 500, "/search", "yt_dlp", f"query={query} err={exc}")
-        try:
-            from backend import logger as flog
-            flog.error("web", "search_error", str(exc), {"query": query}, exc_info=True)
-        except Exception:
-            pass
-        _search_cache[key] = results
-        return results
+    results = [_entry_to_dict(entry) for entry, _t, _d in youtube.search(query, limit)]
     devlog.log_info(
-        "FETCH", 200, "/search", "yt_dlp", f"query={query} {len(results)} results"
+        "FETCH", 200, "/search", "backend", f"query={query} {len(results)} results"
     )
     _search_cache[key] = results
     if len(_search_cache) > SEARCH_CACHE_MAX:
@@ -175,35 +142,16 @@ def _cached_search(query, limit):
 
 
 def _fetch_radio(video_id, max_results=30):
-    radio_url = f"https://www.youtube.com/watch?v={video_id}&list=RDMM{video_id}"
-    opts = {**_ydl_radio, "playlistend": max_results}
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(radio_url, download=False)
-            entries = info.get("entries", []) if info else []
-            tracks = [
-                {
-                    "title": _truncate_title(e.get("title", "Unknown")),
-                    "video_id": e["id"],
-                    "duration": e.get("duration", 0),
-                    "thumbnail": _get_thumbnail(e),
-                }
-                for e in entries
-                if e.get("id")
-            ]
-            devlog.log_info(
-                "FETCH",
-                200,
-                "/recommend",
-                "yt_dlp",
-                f"radio vid={video_id} {len(tracks)} tracks",
-            )
-            return tracks
-    except Exception as exc:
-        devlog.log_error(
-            "FETCH", 500, "/recommend", "yt_dlp", f"radio vid={video_id} err={exc}"
-        )
-        raise
+    tracks = youtube.fetch_radio_for_id(video_id, max_results)
+    return [
+        {
+            "title": _truncate_title(title),
+            "video_id": vid,
+            "duration": dur,
+            "thumbnail": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+        }
+        for title, vid, dur in tracks
+    ]
 
 
 PLAY_CACHE_TTL = 20 * 60
@@ -256,11 +204,7 @@ def _get_full_entry(video_id, fresh=False):
         return cached[1]
     _ensure_segments(video_id)
     try:
-        entry = sponsor.stream_info(
-            f"https://www.youtube.com/watch?v={video_id}",
-            opts=_ydl_entry,
-            with_segments=False,
-        )
+        entry = youtube.get_entry(f"https://www.youtube.com/watch?v={video_id}")
         if entry:
             _play_cache[video_id] = (now, entry)
             _ensure_segments(entry.get("id"), entry.get("duration"))
@@ -436,70 +380,13 @@ def offline():
     return jsonify({"results": songs})
 
 
-DOWNLOAD_ATTEMPTS = 3
-
-
 def _download_audio(video_id: str, save_dir: str, fmt: str):
     save_path = pathlib.Path(save_dir).expanduser()
     save_path.mkdir(parents=True, exist_ok=True)
-    last_exc = None
-    for attempt in range(DOWNLOAD_ATTEMPTS):
-        try:
-            opts = {
-                **BASE_OPTS,
-                "skip_download": False,
-                "outtmpl": str(save_path / "%(id)s.%(ext)s"),
-                "retries": 5,
-                "fragment_retries": 5,
-            }
-            pps = sponsor.download_postprocessors()
-            if fmt != "webm":
-                pps = pps + [{"key": "FFmpegExtractAudio", "preferredcodec": fmt}]
-            if pps:
-                opts["postprocessors"] = pps
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(
-                    f"https://www.youtube.com/watch?v={video_id}", download=True
-                )
-                filename = ydl.prepare_filename(info)
-                if fmt != "webm":
-                    ext = fmt
-                    stem = pathlib.Path(filename).stem
-                    filename = str(pathlib.Path(save_path) / f"{stem}.{ext}")
-            break
-        except Exception as exc:
-            last_exc = exc
-            logger.warning(
-                "Download attempt %s/%s failed for %s: %s",
-                attempt + 1,
-                DOWNLOAD_ATTEMPTS,
-                video_id,
-                exc,
-            )
-            devlog.log_warn(
-                "FETCH",
-                500,
-                "/download",
-                "yt_dlp",
-                f"vid={video_id} attempt={attempt + 1} err={exc}",
-            )
-            if attempt < DOWNLOAD_ATTEMPTS - 1:
-                time.sleep(2 * (attempt + 1))
-            else:
-                config.down_notify(f"video {video_id}", error=True)
-                raise last_exc
-    library.track_download(
-        video_id,
-        filename,
-        info.get("title", "Unknown"),
-        meta=library.meta_from_info(info),
+    filename = youtube.download_url(
+        f"https://www.youtube.com/watch?v={video_id}", str(save_path), fmt=fmt
     )
-    config.down_notify(info.get("title", "Unknown"))
-    try:
-        library.download_thumbnail(video_id, info.get("thumbnail"))
-    except Exception:
-        pass
-    return filename, info.get("title", "Unknown")
+    return filename, library.get_title(video_id) or "Unknown"
 
 
 @app.route("/download", methods=["POST"])

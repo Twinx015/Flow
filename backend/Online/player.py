@@ -5,6 +5,7 @@ import threading
 import time
 
 from backend import (
+    api,
     config,
     history,
     ipc,
@@ -510,6 +511,8 @@ def play_url(
             mode="online",
             duration=duration,
         )
+        api.push_now(title, artist, "online")
+        api.push_summary()
         mpris.load_track(
             None,
             title,
@@ -629,6 +632,8 @@ def play_entry(entry, title, args=None, flags=None, next_title=None, nav=None):
         history.record_play(
             video_id or "", title, artist, mode="online", duration=duration
         )
+        api.push_now(title, artist, "online")
+        api.push_summary()
         art_path = ""
         if video_id:
             cached = library.thumbnail_path(video_id)

@@ -29,10 +29,38 @@ color names, or `config <target> <value>` for one-off changes.
 | `notify`          | Desktop notifications                      | `true` / `false`                                     |
 | `max_search`      | Max YouTube search results                 | 1–20 (default 5)                                     |
 | `max_radio`       | Max radio mix tracks                       | 1–50 (default 35)                                    |
+| `search_source`   | Where online songs are searched            | `ytmusic` (default) or `youtube` — see below         |
+| `api`             | URL flow pushes play state to              | empty (default) or an `http(s)` URL — see below      |
+
+`search_source` picks the search backend and title handling together:
+
+- `ytmusic` — songs are searched on music.youtube.com (`ytmusicapi`), whose
+  titles are already clean (`52 Bars`, `Don't Worry (feat. Gurlez Akhtar)`),
+  so they are kept as-is everywhere: search, playback, downloads, the
+  library, and MPRIS metadata.
+- `youtube` — songs are searched with yt-dlp's `ytsearch`, whose titles are
+  noisy (`52 Bars (Official Video) Karan Aujla | Ikky`), so Tile cleanup and
+  the six-word cap apply again at display and write time.
 
 `sponsor_categories` (which SponsorBlock segment types are skipped) is set as
 a list in the config file — `sponsor`, `selfpromo`, `intro`, `outro` by
 default.
+
+`api` points flow at a small HTTP endpoint of your own. While it is set,
+after every recorded play flow POSTs two JSON documents to it (fire and
+forget — a dead API never breaks playback):
+
+```bash
+flow config api http://127.0.0.1:8000   # empty disables
+```
+
+- **`POST /now`** — the current song as it starts: `title`, `artist`,
+  `playlist` (the name when playing from a playlist, otherwise `""`),
+  `mode` (`online`/`offline`), and `at` (unix time).
+- **`POST /summary`** — everything `flow --summary` shows: play totals
+  (combined/online/offline/unique/today/downloaded/liked), the top artist,
+  language and song, the per-day 7-day split, this/last week counts, and
+  the full per-song table.
 
 Settings persist to `~/.flow/config.json`:
 

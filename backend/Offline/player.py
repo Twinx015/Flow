@@ -6,6 +6,7 @@ import threading
 import time
 
 from backend import (
+    api,
     config,
     history,
     ipc,
@@ -437,6 +438,8 @@ def play_file(filepath, title, args=None, flags=None, next_title=None, nav=None)
         history.record_play(
             video_id, title, artist, mode="offline", duration=int(duration)
         )
+        api.push_now(title, artist, "offline")
+        api.push_summary()
         art_path = ""
         if thumb:
             art_path = str(thumb)

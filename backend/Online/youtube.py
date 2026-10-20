@@ -1,6 +1,8 @@
 import logging
 import pathlib
 import sys
+import threading
+import time
 
 import yt_dlp
 
@@ -14,6 +16,11 @@ except Exception:
 
 SEARCH_CACHE_MAX = 50
 _search_cache = {}
+
+DOWNLOAD_ATTEMPTS = 3
+
+_ytmusic = None
+_ytmusic_lock = threading.Lock()
 
 BASE_OPTS = {
     "quiet": True,
@@ -52,13 +59,119 @@ ydl_opts_play = {
 }
 
 
+def _get_ytmusic():
+    global _ytmusic
+    if _ytmusic is None:
+        with _ytmusic_lock:
+            if _ytmusic is None:
+                from ytmusicapi import YTMusic
+
+                _ytmusic = YTMusic()
+    return _ytmusic
+
+
+def _duration_seconds(item):
+    """Song length in seconds, from `duration_seconds` or a `m:ss` string."""
+    seconds = item.get("duration_seconds")
+    if isinstance(seconds, int) and seconds > 0:
+        return seconds
+    text = str(item.get("duration") or "")
+    if ":" not in text:
+        return 0
+    try:
+        total = 0
+        for part in text.split(":"):
+            total = total * 60 + int(part)
+    except ValueError:
+        return 0
+    return total
+
+
+def _music_entry(item):
+    """A YouTube Music song reshaped as a flat yt-dlp entry for the rest of flow."""
+    video_id = item.get("videoId")
+    if not video_id:
+        return None
+    artists = [a.get("name") for a in item.get("artists") or [] if a.get("name")]
+    credits = ", ".join(artists)
+    thumbs = item.get("thumbnails") or []
+    return {
+        "id": video_id,
+        "title": item.get("title") or "Unknown",
+        "duration": _duration_seconds(item),
+        "uploader": credits,
+        "artist": credits,
+        "album": (item.get("album") or {}).get("name"),
+        "channel_id": (item.get("artists") or [{}])[0].get("id"),
+        "thumbnail": thumbs[-1].get("url") if thumbs else None,
+        "thumbnails": thumbs,
+        "view_count": item.get("views"),
+        "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+        "extractor": "youtube:music",
+    }
+
+
 def search(query, limit=3):
-    key = f"{query}:{limit}"
+    """Search via `config.SearchSource`; returns (entry, title, duration) tuples."""
+    key = f"{config.SearchSource}:{query}:{limit}"
     if key in _search_cache:
         return _search_cache[key]
+    if config.SearchSource == "youtube":
+        results = _search_youtube(query, limit)
+    else:
+        results = _search_music(query, limit)
+    _search_cache[key] = results
+    if len(_search_cache) > SEARCH_CACHE_MAX:
+        oldest = next(iter(_search_cache))
+        del _search_cache[oldest]
+    return results
+
+
+def _search_music(query, limit):
+    """YouTube Music song search, reshaped into flat yt-dlp entries."""
     try:
         from backend import logger as flog
-        flog.info("yt_dlp", "search", f"ytsearch{limit}:{query}", {"query": query, "limit": limit})
+
+        flog.info(
+            "youtube_music",
+            "search",
+            f"songs:{query}",
+            {"query": query, "limit": limit},
+        )
+    except Exception:
+        pass
+    try:
+        raw = _get_ytmusic().search(query, filter="songs", limit=limit)
+    except Exception as exc:
+        logger.warning("YouTube Music search failed for %r: %s", query, exc)
+        try:
+            from backend import logger as flog
+
+            flog.error(
+                "youtube_music", "search_error", str(exc), {"query": query}, exc_info=True
+            )
+        except Exception:
+            pass
+        return []
+    results = []
+    for item in raw or []:
+        entry = _music_entry(item)
+        if entry:
+            results.append((entry, entry["title"], entry["duration"]))
+    return results[:limit]
+
+
+def _search_youtube(query, limit):
+    """Plain yt-dlp `ytsearchN` search, same shape as `_search_music`."""
+    try:
+        from backend import logger as flog
+
+        flog.info(
+            "yt_dlp",
+            "search",
+            f"ytsearch{limit}:{query}",
+            {"query": query, "limit": limit},
+        )
     except Exception:
         pass
     try:
@@ -68,45 +181,21 @@ def search(query, limit=3):
         logger.warning("Search failed for %r: %s", query, exc)
         try:
             from backend import logger as flog
-            flog.error("yt_dlp", "search_error", str(exc), {"query": query}, exc_info=True)
+
+            flog.error(
+                "yt_dlp", "search_error", str(exc), {"query": query}, exc_info=True
+            )
         except Exception:
             pass
         return []
-    if not info or not info.get("entries"):
-        return []
     results = []
-    for entry in info["entries"]:
+    for entry in (info or {}).get("entries") or []:
         if not entry:
             continue
         title = entry.get("title", "Unknown")
         dur = entry.get("duration", 0)
         results.append((entry, title, dur))
-    _search_cache[key] = results
-    if len(_search_cache) > SEARCH_CACHE_MAX:
-        oldest = next(iter(_search_cache))
-        del _search_cache[oldest]
-    for entry, title, dur in results:
-        config.dev_print(
-            "YouTube Search Result",
-            {
-                "title": entry.get("title", "Unknown"),
-                "video_id": entry.get("id"),
-                "url": entry.get("webpage_url")
-                or entry.get("original_url")
-                or entry.get("url")
-                or (
-                    f"https://www.youtube.com/watch?v={entry['id']}"
-                    if entry.get("id")
-                    else None
-                ),
-                "duration": f"{dur}s",
-                "uploader": entry.get("uploader", "Unknown"),
-                "channel_id": entry.get("channel_id"),
-                "view_count": entry.get("view_count"),
-                "upload_date": entry.get("upload_date"),
-            },
-        )
-    return results
+    return results[:limit]
 
 
 def progress_hook(d):
@@ -143,30 +232,63 @@ def download_url(url, outdir, fmt=None, progress=False):
         opts["postprocessors"] = pps
     try:
         from backend import logger as flog
-        flog.log_track_event("yt_dlp", "download_start", {"url": url, "fmt": fmt, "outdir": outdir}, {"url": url, "fmt": fmt})
+
+        flog.log_track_event(
+            "yt_dlp",
+            "download_start",
+            {"url": url, "fmt": fmt, "outdir": outdir},
+            {"url": url, "fmt": fmt},
+        )
     except Exception:
         try:
             from backend import logger as flog
-            flog.info("yt_dlp", "download", f"downloading {url}", {"url": url, "fmt": fmt, "outdir": outdir})
+
+            flog.info(
+                "yt_dlp",
+                "download",
+                f"downloading {url}",
+                {"url": url, "fmt": fmt, "outdir": outdir},
+            )
         except Exception:
             pass
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            if fmt and fmt != "webm":
-                stem = pathlib.Path(filename).stem
-                filename = str(pathlib.Path(outdir) / f"{stem}.{fmt}")
-    except Exception as exc:
+    last_exc = None
+    filename = ""
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                if fmt and fmt != "webm":
+                    stem = pathlib.Path(filename).stem
+                    filename = str(pathlib.Path(outdir) / f"{stem}.{fmt}")
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Download attempt %s/%s failed for %s: %s",
+                attempt,
+                DOWNLOAD_ATTEMPTS,
+                url,
+                exc,
+            )
+            if attempt < DOWNLOAD_ATTEMPTS:
+                time.sleep(2 * attempt)
+        else:
+            last_exc = None
+    if last_exc is not None:
         rich_display.download_stop()
-        logger.warning("Download failed for %s: %s", url, exc)
+        logger.warning("Download failed for %s: %s", url, last_exc)
         try:
             from backend import logger as flog
-            flog.error("yt_dlp", "download_error", str(exc), {"url": url}, exc_info=True)
+
+            flog.error(
+                "yt_dlp", "download_error", str(last_exc), {"url": url}, exc_info=True
+            )
         except Exception:
             pass
         config.down_notify(url, error=True)
-        raise
+        raise last_exc
     rich_display.download_stop()
     if opts.get("progress_hooks"):
         sys.stdout.write("\r" + " " * 60 + "\r")
@@ -184,6 +306,7 @@ def download_url(url, outdir, fmt=None, progress=False):
     }
     try:
         from backend import logger as flog
+
         flog.log_track_event("yt_dlp", "download_complete", dl_info_full, dl_info_full)
     except Exception:
         pass
@@ -220,22 +343,8 @@ def fetch_info(video_id: str):
         return None
 
 
-def fetch_radio(query, max_results=30):
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-    except Exception as exc:
-        logger.warning("Radio seed search failed for %r: %s", query, exc)
-        return []
-    if not info or not info.get("entries"):
-        return []
-    seed = info["entries"][0]
-    if not seed:
-        return []
-    video_id = seed.get("id")
-    if not video_id:
-        return []
-
+def fetch_radio_for_id(video_id, max_results=30):
+    """Auto-mix tracks seeded from one video id, as (title, id, duration) triples."""
     radio_url = f"https://www.youtube.com/watch?v={video_id}&list=RDMM{video_id}"
     config.dev_print(
         "YouTube Radio Seed",
@@ -274,6 +383,24 @@ def fetch_radio(query, max_results=30):
         ],
     )
     return results
+
+
+def fetch_radio(query, max_results=30):
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+    except Exception as exc:
+        logger.warning("Radio seed search failed for %r: %s", query, exc)
+        return []
+    if not info or not info.get("entries"):
+        return []
+    seed = info["entries"][0]
+    if not seed:
+        return []
+    video_id = seed.get("id")
+    if not video_id:
+        return []
+    return fetch_radio_for_id(video_id, max_results)
 
 
 def _entry_failure(exc) -> str:

@@ -24,14 +24,24 @@ and dispatches to handler functions.
 
 ## Fetching
 
-`backend/Online/youtube.py` wraps `yt_dlp`:
+`backend/Online/youtube.py` wraps `yt_dlp` and `ytmusicapi` and dispatches on
+`config.SearchSource` (`"ytmusic"` by default, `youtube` for the old path):
 
-- `search(query, limit)` — `ytsearchN` flat search; returns `(info, title, duration)` tuples.
+- `search(query, limit)` — YouTube Music (`ytmusicapi`, `filter="songs"`)
+  or `ytsearchN` flat search; both reshape results into flat yt-dlp entries
+  and return `(info, title, duration)` tuples, trimmed to `limit`. Titles are
+  only Tile-truncated (`config._truncate_title`) in `youtube` mode; Music
+  titles are already clean and are kept as-is everywhere (search, playback,
+  downloads, the library, MPRIS/DBus metadata).
 - `get_entry(url)` — full entry for a watch URL, run through
-  `sponsor.stream_info()` so SponsorBlock segments are attached.
+  `sponsor.stream_info()` so SponsorBlock segments are attached. Music ids
+  are resolved through yt-dlp like any other video, so playback and
+  download-time tag extraction (language/artist via `tags.tags_from_info`)
+  are unchanged.
 - `download_url(url, outdir, fmt)` — downloads and post-processes the audio;
   non-`webm` formats go through ffmpeg (`FFmpegExtractAudio`).
-- `fetch_radio(query, max_results)` — `RDMM<id>` auto-mix playlist extraction.
+- `fetch_radio(query, max_results)` — `RDMM<id>` auto-mix playlist extraction
+  (still seeded through a yt-dlp `ytsearch1` lookup).
 
 Shared `yt_dlp` options pin the player client (`youtube: android`) and set
 sane timeouts/retries (`socket_timeout`, `retries`, `extractor_retries`).

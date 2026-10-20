@@ -33,6 +33,7 @@ scripts, ssh sessions and agents.
 | `--like`            | Like the currently playing song (requires an active player)               |
 | `--unlike`          | Unlike the currently playing song                                         |
 | `--download`        | Download the currently playing song                                       |
+| `--import FILE`     | Import a CSV, m3u, or txt track list (see [importing](#importing-a-list)) |
 | `--setup-island`    | Install the Hyprland music island into `~/.config/quickshell`             |
 | `--check`           | Check all dependencies                                                    |
 
@@ -279,28 +280,41 @@ flow playlist download roadtrip # download all YouTube tracks in it
 
 `-m` may appear right after the subcommand (`playlist add -m pl ...`) or
 after the name (`playlist add pl -m ...`). Without it, `add`/`remove` behave
-as before: every word after the name is one query or one title.</think>
-
-<｜DSML｜tool_calls>
-<｜DSML｜invoke name="edit">
-<｜DSML｜parameter name="newString" string="true">```bash
-flow playlist create roadtrip
-flow playlist add roadtrip "some song"
-flow playlist add -m roadtrip 3 7 9   # several at once (each word = one index or query)
-flow playlist remove -m roadtrip 2 5  # several by index (resolved high-to-low)
-flow playlist remove -m roadtrip a b  # several by title match (first match each)
-flow playlist list
-flow playlist play roadtrip
-flow playlist export roadtrip   # writes roadtrip.m3u to ~/Downloads
-flow playlist import songs.m3u  # name defaults to the file name
-flow playlist download roadtrip # download all YouTube tracks in it
-```
-
-`-m` may sit right after the subcommand (`playlist add -m pl ...`) or after
-the name (`playlist add pl -m ...`). Without it, `add`/`remove` behave as
-before: every word after the name is treated as one query or one title.
+as before: every word after the name is one query or one title.
 
 `liked` is a reserved playlist name.
+
+### Importing a list
+
+`flow --import FILE` turns a song list you already have into flow tracks.
+The format follows the file extension, with content sniffing for anything
+else:
+
+- **`.csv`** — the header row picks the columns. Common names are
+  auto-detected: a URL or video-id column is used directly, otherwise
+  title/artist (aliases like Spotify's `Track Name`, `Artist Name(s)`, or
+  YouTube Takeout's `Video Id`) become a YouTube search. `Duration` accepts
+  `m:ss`, plain seconds, or milliseconds (`Duration(ms)`).
+- **`.m3u` / `.m3u8`** — `#EXTINF` titles and durations plus URL lines.
+  Local file paths that exist are kept as offline tracks; other lines
+  become queries.
+- **`.txt`** — one song per line: a URL (with an optional label before it)
+  or a plain search query. `#` lines are comments.
+- **anything else** — sniffed: `#EXTM3U`/`#EXTINF` parses as m3u, a
+  `title/url/artist…` header line as CSV, the rest as txt.
+
+The file is previewed first (`url`/`search` marks show how each row
+resolves), then an interactive panel offers:
+
+1. **Download all as a playlist** — asks for a playlist name (the file name
+   is the default), adds every track, and downloads them;
+   already-downloaded songs are skipped.
+2. **Download (no playlist)** — just the downloads.
+3. **Play online one by one** — a queue played straight through; Ctrl-C
+   exits, player next/previous keys navigate.
+
+`-f <fmt>` works with the download actions (`flow --import list.csv -f m4a`).
+Imports need online mode.
 
 ## flow-min: plain, non-interactive
 

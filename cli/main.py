@@ -388,6 +388,14 @@ def main():
     )
     parser.add_argument("--play", nargs="+", help="play a song")
     parser.add_argument(
+        "--import",
+        dest="import_file",
+        nargs=1,
+        metavar="FILE",
+        help="import a CSV/m3u/txt track list; interactive panel offers "
+        "playlist-download, plain download, or play online one by one",
+    )
+    parser.add_argument(
         "--play-off", nargs="+", help="play a song from the local library (offline)"
     )
     parser.add_argument("--rd", nargs="+", help="play radio mix")
@@ -644,6 +652,9 @@ def main():
     elif getattr(args, "play", None) is not None:
         args.command = "play"
         unknown = args.play + unknown
+    elif getattr(args, "import_file", None) is not None:
+        args.command = "import"
+        unknown = args.import_file + unknown
     elif getattr(args, "rd", None) is not None:
         args.command = "radio"
         unknown = args.rd + unknown
