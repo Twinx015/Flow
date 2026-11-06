@@ -1,6 +1,6 @@
 [project]
 name = "flow-twinx"
-version = "0.10.0"
+version = "0.10.1"
 description = "A terminal music player with online and offline modes songs sourced from youtube."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -25,7 +25,14 @@ dependencies = [
 ]
 
 keywords = [
-    "youtube", "music", "cli", "tui", "web", "musicplayer", "youtube-client", "flow",
+    "youtube",
+    "music",
+    "cli",
+    "tui",
+    "web",
+    "musicplayer",
+    "youtube-client",
+    "flow",
 ]
 
 [project.scripts]
@@ -44,12 +51,10 @@ include = ["cli*", "backend*", "minimal*", "tui*", "web*"]
 [tool.setuptools.package-data]
 flow_twinx = ["Hyprland/*.qml"]
 web = ["templates/*"]
+cli = ["banners/*.txt"]
 
 [dependency-groups]
-dev = [
-    "pyinstaller>=6.21.0",
-    "pytest>=8.0",
-]
+dev = ["pyinstaller>=6.21.0", "pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

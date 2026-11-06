@@ -36,6 +36,8 @@ def _show_status() -> None:
 
 
 def main():
+    from backend import config
+
     parser = argparse.ArgumentParser(
         prog="flowt",
         description="Flow — terminal UI music player",
@@ -69,6 +71,12 @@ def main():
         "--status",
         action="store_true",
         help="show playback and web mode status, then exit",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {config.VERSION}",
+        help="print the Flow version and exit",
     )
     args = parser.parse_args()
 

@@ -267,6 +267,8 @@ Secondary = _sgr("purple")
 Tertiary = _sgr("blue")
 Muted = GREY
 Display = "bars"
+Banner = "classic"
+_BANNER_MODES = {"classic", "random"}
 BarWidth = 20
 BarHeight = 40
 BarSpacing = 1
@@ -834,7 +836,8 @@ def _load_config():
         LastfmUsername, \
         ListenbrainzUsername, \
         ProgressColumns, \
-        CustomColor
+        CustomColor, \
+        Banner
     if not CONFIG_FILE.exists():
         return
     try:
@@ -856,6 +859,8 @@ def _load_config():
         _render()
         if "display" in data and data["display"] in _DISPLAY_MODES:
             Display = data["display"]
+        if data.get("banner") in _BANNER_MODES:
+            Banner = data["banner"]
         if "progress_columns" in data and isinstance(data["progress_columns"], list):
             cols = [
                 c
@@ -978,6 +983,7 @@ def _save_config():
         "tertiary": _STYLE["tertiary"],
         "custom_color": CustomColor,
         "display": Display,
+        "banner": Banner,
         "progress_columns": ProgressColumns,
         "progress_type": ProgressType,
         "bar_width": BarWidth,
@@ -1251,6 +1257,16 @@ def _apply_display(value):
     return f"{Tertiary}Display mode changed to {value}{Reset}"
 
 
+def _apply_banner(value):
+    global Banner
+    name = str(value or "").strip().lower()
+    if name not in _BANNER_MODES:
+        return f"Unknown banner '{value}'. Options: classic, random"
+    Banner = name
+    _save_config()
+    return f"{Tertiary}Banner changed to {name}{Reset}"
+
+
 def _apply_progress_columns(value):
     global ProgressColumns, ProgressType
     parts = [p.strip().lower() for p in re.split(r"[,\s]+", str(value)) if p.strip()]
@@ -1453,6 +1469,7 @@ PLUGIN_SAFE_KEYS = {
     "spinner",
     "rich_spinner",
     "display",
+    "banner",
     "progress_columns",
     "progress_type",
     "barwidth",
@@ -1507,6 +1524,8 @@ def apply_config(key, value):
         return _apply_clear_colors()
     if target == "display":
         return _apply_display(value)
+    if target == "banner":
+        return _apply_banner(value)
     if target == "progress_columns":
         return _apply_progress_columns(value)
     if target in ("barwidth", "width"):
@@ -1582,6 +1601,7 @@ def config_get(key):
         "spinner": lambda: SPINNER,
         "rich_spinner": lambda: RichSpinner,
         "display": lambda: Display,
+        "banner": lambda: Banner,
         "progress_columns": lambda: ProgressColumns,
         "progress_type": lambda: ProgressType,
         "barwidth": lambda: BarWidth,
@@ -1653,6 +1673,9 @@ def cmd_config(extra: list[str], args=None):
         print(f"  {Secondary}secondary{Reset} (aliases: sec)")
         print(f"  {Tertiary}tertiary{Reset}  (aliases: ter)")
         print(f"  {GREY}display{Reset}    (none, bars, lyrics, progress, rich)")
+        print(
+            f"  {GREY}banner{Reset}     (classic, random — current: {Banner})"
+        )
         print(
             f"  {GREY}progress_columns{Reset} (rich progress bar columns — "
             f"{', '.join(_RICH_COLUMN_NAMES)}; aliases: richcols, rich_columns)"
@@ -1749,6 +1772,8 @@ def cmd_config(extra: list[str], args=None):
         emit(_apply_color("tertiary", value))
     elif target == "display":
         emit(_apply_display(value))
+    elif target == "banner":
+        emit(_apply_banner(value))
     elif target == "progress_columns":
         emit(_apply_progress_columns(value))
     elif target == "progress_type":
@@ -1959,6 +1984,14 @@ def _interactive_rows():
             "select",
             ["none", "bars", "lyrics", "progress", "rich"],
             lambda v: _apply_display(str(v)),
+        ),
+        (
+            "banner",
+            "Banner",
+            lambda: Banner,
+            "select",
+            sorted(_BANNER_MODES),
+            lambda v: _apply_banner(str(v)),
         ),
         (
             "primary",

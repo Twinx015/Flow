@@ -241,9 +241,17 @@ def _start_server(new, port, spawned=False):
 
 
 def main():
+    from backend import config
+
     parser = argparse.ArgumentParser(
         prog="flow-web",
         description="Start or stop the Flow web server on the first free port from 5000.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {config.VERSION}",
+        help="print the Flow version and exit",
     )
     parser.add_argument(
         "--stop",

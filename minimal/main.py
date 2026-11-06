@@ -6,6 +6,7 @@ import sys
 from backend.platform import bootstrap_vlc
 
 bootstrap_vlc()
+from backend import config as backend_config
 from backend import history as history_mod
 
 from . import core, extras, local, out, stats
@@ -33,6 +34,12 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--json", action="store_true", help="print one JSON document instead of lines")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {backend_config.VERSION}",
+        help="print the Flow version and exit",
+    )
     subs = parser.add_subparsers(dest="command", metavar="<command>")
 
     def add(name, help_text, aliases=()):

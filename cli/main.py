@@ -428,6 +428,12 @@ def main():
     )
     parser.add_argument("--play", nargs="+", help="play a song")
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {config.VERSION}",
+        help="print the Flow version and exit",
+    )
+    parser.add_argument(
         "--import",
         dest="import_file",
         nargs=1,

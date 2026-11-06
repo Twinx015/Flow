@@ -1,22 +1,44 @@
 import builtins
 import os
+import random
 import sys
+from pathlib import Path
 
 from backend import config, keys
 
-BANNER = r"""
-███████╗██╗      ██████╗ ██╗    ██╗
-██╔════╝██║     ██╔═══██╗██║    ██║
-█████╗  ██║     ██║   ██║██║ █╗ ██║
-██╔══╝  ██║     ██║   ██║██║███╗██║
-██║     ███████╗╚██████╔╝╚███╔███╔╝
-╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝
-"""
+BANNERS_DIR = Path(__file__).resolve().parent / "banners"
+
+
+def banner_names():
+    """Banner file stems (without .txt), sorted."""
+    try:
+        return sorted(path.stem for path in BANNERS_DIR.glob("*.txt"))
+    except OSError:
+        return []
+
+
+def load_banner(name=None):
+    """Banner text for `name`, or a random one when `name` is "random"."""
+    if name is None:
+        name = getattr(config, "Banner", "classic")
+    if name == "random":
+        names = banner_names()
+        if names:
+            name = random.choice(names)
+    path = BANNERS_DIR / f"{name}.txt"
+    if not path.exists():
+        path = BANNERS_DIR / "classic.txt"
+    try:
+        return path.read_text(encoding="utf-8").rstrip("\n")
+    except OSError:
+        return ""
 
 
 def show_banner():
     c = config.Primary if config.Mode == "Online" else config.Secondary
-    builtins.print(f"{c}{BANNER}{config.Reset}")
+    banner = load_banner()
+    if banner:
+        builtins.print(f"{c}{banner}{config.Reset}")
     builtins.print(
         f"{config.Muted}         Flow Music Player v{config.VERSION}{config.Reset}"
     )
@@ -25,7 +47,13 @@ def show_banner():
         print(f"     {config.RED}       [Dev Mode]{config.Reset}")
     try:
         from backend import logger
-        logger.debug("tui", "ui", "show_banner called", {"mode": config.Mode, "dev_mode": config.DEV_MODE})
+
+        logger.debug(
+            "tui",
+            "ui",
+            "show_banner called",
+            {"mode": config.Mode, "dev_mode": config.DEV_MODE},
+        )
     except Exception:
         pass
     builtins.print()
