@@ -10,6 +10,7 @@ M = config.Muted
 E = config.RED
 G = config.GREY
 R = config.Reset
+config.keep_live(globals())
 
 SORTS = ("plays", "recent", "name", "artist")
 

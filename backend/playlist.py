@@ -45,6 +45,7 @@ _SUBCOMMANDS = {
     "export": "export",
     "import": "import",
     "imp": "import",
+    "search": "search",
     "download": "download",
     "dl": "download",
 }

@@ -7,7 +7,6 @@ import threading
 import time
 
 from backend import (
-    api,
     config,
     help_detail,
     ipc,
@@ -33,6 +32,7 @@ M = config.Muted
 E = config.RED
 G = config.GREY
 R = config.Reset
+config.keep_live(globals())
 
 m = lambda t: print(f"{M}{t}{R}")
 e = lambda t: print(f"{E}{t}{R}")
@@ -115,13 +115,14 @@ COMMANDS = {
     "delete": "Delete a downloaded song (alias: dl-d)",
     "artist": "Play songs by artist | artist <name> | -s shuffle",
     "tags": "Library tags | tags (editor) | tags list/add/remove/rename/delete",
-    "playlist": "Manage playlists | create add remove list play rename move dup merge sort clear dedupe info export import download (-m for multi add/remove)",
+    "playlist": "Manage playlists | create add remove list play rename move dup merge sort clear dedupe info export import download | search <query> -d|-dm (YouTube playlists)",
     "switch": "Switch to Offline mode",
     "help": "Show this help message",
     "short": "Show/update command shortcuts",
     "config": "Change primary/secondary/tertiary colors, format, display",
     "check": "Check all dependencies (ffmpeg, vlc, yt-dlp, psutil)",
     "summary": "Play summary | -l per-song table | -s <sort> | --top N | -c clear all plays",
+    "scrobbler": "Scrobbling (Last.fm / ListenBrainz) | auth lastfm|listenbrainz | status | logout",
     "export": "Copy downloaded songs to ~/Downloads | -p <path> for elsewhere",
     "exit": "Exit Flow",
 }
@@ -151,6 +152,10 @@ def run(cmd: str, extra: list[str], args):
         from backend import import_file
 
         import_file.run(extra, args)
+    elif cmd in ("scrobbler", "scr"):
+        from backend.scrobbler import cli as scrobbler_cli
+
+        scrobbler_cli.handle(extra)
     elif cmd in ("savan", "svn"):
         savan_cmd(extra, args)
     elif cmd in ("savan-s", "svn-s"):
@@ -440,7 +445,6 @@ def play(extra: list[str], args):
     if config.kill_stored():
         print(f"{P}Stopped VLC{R}")
     _clear_all_nav()
-    api.set_playlist("")
     global _last_results, _last_played
     arg = " ".join(extra) if extra else None
     if not arg:
@@ -1496,7 +1500,6 @@ def playlist_cmd(extra, args):
     def play(actual, tracks, args):
         global _last_played
         tracks = list(tracks)
-        api.set_playlist(actual)
         if getattr(args, "shuffle", False):
             random.shuffle(tracks)
         repeat = getattr(args, "repeat", False)
@@ -1557,8 +1560,6 @@ def playlist_cmd(extra, args):
                     break
         except KeyboardInterrupt, _StopPlayback:
             pass
-        finally:
-            api.set_playlist("")
 
     def list_liked():
         liked = library.get_liked_entries()
@@ -1597,6 +1598,173 @@ def playlist_cmd(extra, args):
         if done == len(tracks):
             i(f"    All {done} tracks available on device")
 
+    def _fmt_pl(idx, card):
+        label = f"{idx}. {_truncate_title(card.get('title'))}"
+        author = card.get("artist") or ""
+        if author:
+            label += f"  [{author}]"
+        count = str(card.get("item_count") or "").strip()
+        if count:
+            label += f"  ({count} songs)"
+        return label
+
+    def _print_pl(results):
+        for idx, card in enumerate(results, 1):
+            m(f"  {_fmt_pl(idx, card)}")
+
+    def _pl_choices(results):
+        return [
+            make_choice(_fmt_pl(idx, card), idx - 1)
+            for idx, card in enumerate(results, 1)
+        ]
+
+    def _pick_one_pl(results, action):
+        if sys.stdin.isatty():
+            picked, used = pick_many(
+                f"{action} which playlist?",
+                _pl_choices(results),
+                instruction="(Space toggle, a all, Enter confirm)",
+            )
+            if used:
+                if picked is None:
+                    return None
+                if len(picked) > 1:
+                    m("    Multiple picked - add -m to download several. Using first.")
+                return min(picked)
+        if not sys.stdin.isatty():
+            return 0 if results else None
+        while True:
+            _print_pl(results)
+            prompt = f"{action} which playlist? [1-{len(results)}, default 1] "
+            try:
+                choice = input(f"{P}{prompt}{R}").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return None
+            if not choice:
+                return 0
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(results):
+                    return idx
+            e("    Invalid choice")
+
+    def _pick_many_pl(results, action):
+        if sys.stdin.isatty():
+            picked, used = pick_many(
+                f"{action} which playlists?",
+                _pl_choices(results),
+                instruction="(Space toggle, a all, Enter confirm)",
+            )
+            if used:
+                return None if picked is None else sorted(set(picked))
+        if not sys.stdin.isatty():
+            return [0] if results else None
+        while True:
+            _print_pl(results)
+            prompt = (
+                f"{action} which playlists? [1-{len(results)}, e.g. 1,3,5-7 or all] "
+            )
+            try:
+                choice = input(f"{P}{prompt}{R}").strip()
+            except (EOFError, KeyboardInterrupt):
+                return None
+            if not choice:
+                return None
+            if choice.lower() in ("a", "all"):
+                return list(range(len(results)))
+            picks = parse_index_list(choice, len(results))
+            if picks:
+                return picks
+            e("    Invalid choice")
+
+    def _download_remote(card, a):
+        pid = card.get("playlist_id") or ""
+        if not pid:
+            e("     Invalid playlist result")
+            return
+        title = _truncate_title(card.get("title"))
+        i(f"    Fetching {title}...")
+        data = youtube.ytm_playlist(pid) or {}
+        tracks = [t for t in data.get("tracks") or [] if t.get("video_id")]
+        if not tracks:
+            e(f"     No tracks found in {title}")
+            return
+        name = (data.get("title") or card.get("title") or "Unknown").strip()
+        if not name or name.lower() in playlist.RESERVED_NAMES or not playlist.create(name):
+            n = 2
+            free = ""
+            while n <= 30:
+                free = f"{name} {n}"
+                if playlist.create(free):
+                    break
+                n += 1
+            if n > 30:
+                e(f"     Cannot find a free name for '{name}'")
+                return
+            actual = free
+        else:
+            actual = name
+        added = 0
+        for t in tracks:
+            state, _ = playlist.add_track(
+                actual,
+                playlist.make_track(
+                    title=t.get("title") or "Unknown",
+                    ref=f"https://www.youtube.com/watch?v={t.get('video_id')}",
+                    video_id=t.get("video_id") or "",
+                    duration=int(t.get("duration") or 0),
+                    thumb=t.get("thumbnail") or "",
+                ),
+            )
+            if state == "added":
+                added += 1
+        if not added:
+            playlist.delete(actual)
+            e(f"     Could not add tracks from {title}")
+            return
+        i(f"    Added {added} tracks to {actual}")
+        download(actual, playlist.get(actual), a)
+
+    def search_playlists(words, a):
+        query = " ".join(w for w in words if not w.startswith("-")).strip()
+        if not query:
+            e("Usage: playlist search <query> [-d|-m]")
+            return
+        stop = False
+        t = threading.Thread(target=_spinner, args=(lambda: stop,), daemon=True)
+        t.start()
+        try:
+            results = [
+                c
+                for c in youtube.ytm_search(query, "playlists", limit=20)
+                if c.get("type") == "playlist"
+            ]
+        finally:
+            stop = True
+            t.join()
+        if not results:
+            e("     No playlists found")
+            return
+        if not getattr(a, "download", False):
+            i("  Playlists:")
+            _print_pl(results)
+            return
+        multi = getattr(a, "multi", False)
+        fmt = _resolve_fmt(a)
+        if fmt is None:
+            return
+        if multi:
+            picks = _pick_many_pl(results, "Download")
+            if not picks:
+                return
+        else:
+            one = _pick_one_pl(results, "Download")
+            if one is None:
+                return
+            picks = [one]
+        for p in picks:
+            _download_remote(results[p], a)
+
     plist_cli.handle(
         extra,
         args,
@@ -1606,6 +1774,7 @@ def playlist_cmd(extra, args):
             "play_liked": _play_liked,
             "list_liked": list_liked,
             "download": download,
+            "search": search_playlists,
         },
     )
 

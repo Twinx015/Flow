@@ -15,6 +15,7 @@ P = Primary
 S = Secondary
 M = Muted
 R = Reset
+config.keep_live(globals())
 G = GREY
 E = RED
 

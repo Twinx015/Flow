@@ -69,7 +69,9 @@ def _make_json_formatter():
             if log_entry.get("error"):
                 if not log_entry["error"].get("message") and not log_entry["error"].get("traceback"):
                     del log_entry["error"]
-            return json.dumps(log_entry, ensure_ascii=False)
+            # default=str keeps payloads with Paths/datetimes from crashing
+            # the formatter (a logging error drops the line entirely).
+            return json.dumps(log_entry, ensure_ascii=False, default=str)
 
     return JsonFormatter()
 

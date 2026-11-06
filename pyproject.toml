@@ -20,6 +20,8 @@ dependencies = [
     "tile-twinx>=1.0.1",
     "yt-dlp>=2026.8.19",
     "ytmusicapi",
+    "keyring>=25.7.0",
+    "cryptography>=50.0.2",
 ]
 
 keywords = [

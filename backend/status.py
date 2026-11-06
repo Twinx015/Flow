@@ -8,13 +8,14 @@ STATUS_FILE = pathlib.Path.home() / ".flow/status.json"
 WEB_PORT_FILE = pathlib.Path.home() / ".flow/web_port"
 
 
-def update(title, duration=0, playing=True, thumbnail=None):
+def update(title, duration=0, playing=True, thumbnail=None, next_title=""):
     data = {
         "title": title or "Unknown",
         "duration": int(duration or 0),
         "playing": bool(playing),
         "thumbnail": thumbnail or "",
         "elapsed": 0,
+        "next_title": str(next_title or ""),
         "ts": time.time(),
     }
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)

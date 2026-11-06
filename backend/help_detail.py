@@ -178,10 +178,11 @@ def _online_help():
             f"  {M}clear{R} / {M}dedupe{R} / {M}info{R} {G}<name>{R}",
             f"  {M}export{R} {G}<name> [out.m3u]{R}  {G}Write an M3U file{R}",
             f"  {M}import{R} {G}<file.m3u> [name]{R}  {G}Import from M3U{R}",
+            f"  {M}search{R} {G}<query> [-d|-m]{R} {G}Find YouTube playlists; -d downloads, -dm several{R}",
             f"{G}  Names match fuzzily: case-insensitive, prefix/substring.{R}",
             f"{G}  'liked' plays your liked songs as a virtual playlist.{R}",
             f"  {M}Flags:{R} {G}{M}-bg{R} {G}background |{R} {M}-r{R} {G}repeat |{R} {M}-s{R} {G}shuffle{R}",
-            f"  {M}-m{R} {G}multi on add/remove: {M}add -m pl 3 7 9{R} {G}|{R} {M}remove -m pl a b{R}",
+            f"  {M}-m{R} {G}multi on add/remove: {M}add -m pl 3 7 9{R} {G}|{R} {M}remove -m pl a b{R} {G}|{R} {M}search q -dm{R}",
             f"  {G}Alias:{R} {M}plist{R}",
         ],
         "export": [

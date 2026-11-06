@@ -5,7 +5,6 @@ import threading
 import time
 
 from backend import (
-    api,
     config,
     history,
     ipc,
@@ -15,6 +14,7 @@ from backend import (
     mpris,
     platform,
     rich_display,
+    scrobbler,
     sponsor,
     status,
     visualizer,
@@ -36,6 +36,7 @@ T = config.Tertiary
 M = config.Muted
 E = config.RED
 R = config.Reset
+config.keep_live(globals())
 
 
 m = lambda t: print(f"{M}{t}{R}")
@@ -66,6 +67,7 @@ def _publish_play_state():
             duration=_now.get("duration", 0),
             playing=not _paused,
             thumbnail=_now.get("thumbnail"),
+            next_title=_now.get("next", ""),
         )
     except Exception:
         pass
@@ -77,6 +79,7 @@ _pos_pub_at = 0.0
 def _tick_position(player, elapsed=None):
     """Publish live position ~1/s so `flow --full` can render progress."""
     global _pos_pub_at
+    config.maybe_reload()
     now = time.time()
     if now - _pos_pub_at < 1.0:
         return
@@ -479,8 +482,8 @@ def play_url(
             },
         )
 
-        _now.update(title=title, duration=duration, thumbnail=thumbnail)
-        status.update(title, duration, thumbnail=thumbnail)
+        _now.update(title=title, duration=duration, thumbnail=thumbnail, next=next_title or "")
+        status.update(title, duration, thumbnail=thumbnail, next_title=next_title or "")
         dur_min, dur_sec = divmod(int(duration), 60)
         flags = _flags_str(args)
         artist = ""
@@ -511,8 +514,9 @@ def play_url(
             mode="online",
             duration=duration,
         )
-        api.push_now(title, artist, "online")
-        api.push_summary()
+        scrobbler.now_playing(
+            title, artist, album=album, duration_ms=int(duration or 0) * 1000
+        )
         mpris.load_track(
             None,
             title,
@@ -526,6 +530,7 @@ def play_url(
         mpris.set_position_getter(lambda: _player.get_time() if _player else 0)
         _attach_vlc_events()
 
+        track_started = time.time()
         try:
             _display_loop(
                 _player,
@@ -534,6 +539,16 @@ def play_url(
                 artist=artist,
                 album=album,
                 duration=duration,
+            )
+            # The loop only returns on a natural end (savan URL play); the
+            # scrobble gate still filters short listens by played time.
+            scrobbler.scrobble(
+                title,
+                artist,
+                album=album,
+                duration_ms=int(duration or 0) * 1000,
+                started_at=track_started,
+                played_ms=int(_player.get_time() or 0) if _player else 0,
             )
         except KeyboardInterrupt:
             _player.stop()
@@ -603,8 +618,8 @@ def play_entry(entry, title, args=None, flags=None, next_title=None, nav=None):
             },
         )
 
-        _now.update(title=title, duration=duration, thumbnail=thumb)
-        status.update(title, duration, thumbnail=thumb)
+        _now.update(title=title, duration=duration, thumbnail=thumb, next=next_title or "")
+        status.update(title, duration, thumbnail=thumb, next_title=next_title or "")
         dur_min, dur_sec = divmod(int(duration), 60)
         fstr = _flags_str(args)
         artist = ""
@@ -632,8 +647,9 @@ def play_entry(entry, title, args=None, flags=None, next_title=None, nav=None):
         history.record_play(
             video_id or "", title, artist, mode="online", duration=duration
         )
-        api.push_now(title, artist, "online")
-        api.push_summary()
+        scrobbler.now_playing(
+            title, artist, album=album, duration_ms=int(duration or 0) * 1000
+        )
         art_path = ""
         if video_id:
             cached = library.thumbnail_path(video_id)
@@ -673,6 +689,7 @@ def play_entry(entry, title, args=None, flags=None, next_title=None, nav=None):
                     return True
             return False
 
+        track_started = time.time()
         try:
             _display_loop(
                 _player,
@@ -685,6 +702,24 @@ def play_entry(entry, title, args=None, flags=None, next_title=None, nav=None):
                 album=album,
                 duration=duration,
             )
+            # `skipped` is user quits/skips from stop_check; short listens are
+            # still filtered by the scrobbler's played-time rule. VLC reports
+            # ~0 from get_time() once a media has fully ended, so a natural
+            # end with a bogus position counts as the full track.
+            if not skipped:
+                pos = int(_player.get_time() or 0) if _player else 0
+                played_ms = (
+                    pos if pos > scrobbler.MIN_PLAYED_MS
+                    else int(duration or 0) * 1000
+                )
+                scrobbler.scrobble(
+                    title,
+                    artist,
+                    album=album,
+                    duration_ms=int(duration or 0) * 1000,
+                    started_at=track_started,
+                    played_ms=played_ms,
+                )
         except KeyboardInterrupt:
             _player.stop()
             config.clear_pid()

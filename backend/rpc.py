@@ -15,6 +15,7 @@ G = GREY
 M = Muted
 P = Primary
 R = Reset
+config.keep_live(globals())
 Y = YELLOW
 
 #: Typed-only, gated-raw version of the plugin API.

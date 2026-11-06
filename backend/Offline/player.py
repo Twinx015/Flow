@@ -6,7 +6,6 @@ import threading
 import time
 
 from backend import (
-    api,
     config,
     history,
     ipc,
@@ -15,6 +14,7 @@ from backend import (
     mpris,
     platform,
     rich_display,
+    scrobbler,
     status,
     visualizer,
 )
@@ -37,6 +37,7 @@ T = config.Tertiary
 M = config.Muted
 E = config.RED
 R = config.Reset
+config.keep_live(globals())
 
 m = lambda t: print(f"{M}{t}{R}")
 e = lambda t: print(f"{E}{t}{R}")
@@ -65,6 +66,7 @@ def _publish_play_state():
             duration=_now["duration"],
             playing=not _paused,
             thumbnail=_now["thumbnail"],
+            next_title=_now.get("next", ""),
         )
     except Exception:
         pass
@@ -76,6 +78,7 @@ _pos_pub_at = 0.0
 def _tick_position(player, elapsed=None):
     """Publish live position ~1/s so `flow --full` can render progress."""
     global _pos_pub_at
+    config.maybe_reload()
     now = time.time()
     if now - _pos_pub_at < 1.0:
         return
@@ -413,8 +416,8 @@ def play_file(filepath, title, args=None, flags=None, next_title=None, nav=None)
         thumb = library.thumbnail_path(filepath.stem)
         if not pathlib.Path(thumb).exists():
             thumb = None
-        _now.update(title=title, duration=duration, thumbnail=thumb)
-        status.update(title, duration, thumbnail=thumb)
+        _now.update(title=title, duration=duration, thumbnail=thumb, next=next_title or "")
+        status.update(title, duration, thumbnail=thumb, next_title=next_title or "")
         dur_min, dur_sec = divmod(int(duration), 60)
         flags_str = _flags_str(args)
         video_id = filepath.stem
@@ -438,8 +441,9 @@ def play_file(filepath, title, args=None, flags=None, next_title=None, nav=None)
         history.record_play(
             video_id, title, artist, mode="offline", duration=int(duration)
         )
-        api.push_now(title, artist, "offline")
-        api.push_summary()
+        scrobbler.now_playing(
+            title, artist, album=album, duration_ms=int(duration or 0) * 1000
+        )
         art_path = ""
         if thumb:
             art_path = str(thumb)
@@ -456,16 +460,22 @@ def play_file(filepath, title, args=None, flags=None, next_title=None, nav=None)
         mpris.set_position_getter(lambda: _player.get_time() if _player else 0)
         _attach_vlc_events()
 
+        skipped = False
+
         def stop_check():
+            nonlocal skipped
             if flags:
                 if flags.get("quit", lambda: False)():
                     _player.stop()
+                    skipped = True
                     return True
                 if flags.get("skip", lambda: False)():
                     _player.stop()
+                    skipped = True
                     return True
             return False
 
+        track_started = time.time()
         try:
             _display_loop(
                 _player,
@@ -477,6 +487,24 @@ def play_file(filepath, title, args=None, flags=None, next_title=None, nav=None)
                 artist=artist,
                 album=album,
             )
+            # `skipped` covers stop_check quits/skips; short listens are still
+            # filtered by the scrobbler's played-time rule. VLC reports ~0
+            # from get_time() once a media has fully ended, so a natural end
+            # with a bogus position counts as the full track.
+            if not skipped:
+                pos = int(_player.get_time() or 0) if _player else 0
+                played_ms = (
+                    pos if pos > scrobbler.MIN_PLAYED_MS
+                    else int(duration or 0) * 1000
+                )
+                scrobbler.scrobble(
+                    title,
+                    artist,
+                    album=album,
+                    duration_ms=int(duration or 0) * 1000,
+                    started_at=track_started,
+                    played_ms=played_ms,
+                )
         except KeyboardInterrupt:
             _player.stop()
             config.clear_pid()

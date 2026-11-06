@@ -11,6 +11,7 @@ M = config.Muted
 E = config.RED
 G = config.GREY
 R = config.Reset
+config.keep_live(globals())
 
 m = lambda t: print(f"{M}{t}{R}")
 e = lambda t: print(f"{E}{t}{R}")
@@ -418,6 +419,16 @@ def handle(extra, args=None, hooks=None):
             m(f"Playlist '{actual}' is empty")
             return
         hooks["play"](actual, tracks, args)
+
+    elif subcmd == "search":
+        if len(extra) < 2:
+            e("Usage: playlist search <query> [-d|-m]")
+            return
+        search_hook = hooks.get("search")
+        if search_hook is None:
+            e("     Search is not supported in this mode")
+            return
+        search_hook(extra[1:], args)
 
     else:
         raw = extra[0]

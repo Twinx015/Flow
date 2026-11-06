@@ -16,6 +16,7 @@ G = GREY
 M = Muted
 P = Primary
 R = Reset
+_colors.keep_live(globals())
 
 from backend import config as _config
 

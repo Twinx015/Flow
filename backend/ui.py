@@ -7,9 +7,9 @@ def questionary_style(mode="online"):
     def name(style):
         return config._cname(style)
 
-    primary = config._STYLE["primary"]
-    secondary = config._STYLE["secondary"]
-    tertiary = config._STYLE["tertiary"]
+    primary = config._eff_style("primary")
+    secondary = config._eff_style("secondary")
+    tertiary = config._eff_style("tertiary")
 
     if mode == "online":
         return Style(

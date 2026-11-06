@@ -236,7 +236,7 @@ def download_url(url, outdir, fmt=None, progress=False):
         flog.log_track_event(
             "yt_dlp",
             "download_start",
-            {"url": url, "fmt": fmt, "outdir": outdir},
+            {"url": url, "fmt": fmt, "outdir": str(outdir)},
             {"url": url, "fmt": fmt},
         )
     except Exception:
@@ -247,7 +247,7 @@ def download_url(url, outdir, fmt=None, progress=False):
                 "yt_dlp",
                 "download",
                 f"downloading {url}",
-                {"url": url, "fmt": fmt, "outdir": outdir},
+                {"url": url, "fmt": fmt, "outdir": str(outdir)},
             )
         except Exception:
             pass
@@ -471,3 +471,316 @@ def get_entry(url):
             },
         )
     return entry
+
+
+YTM_FILTERS = {
+    "songs": "songs",
+    "videos": "videos",
+    "albums": "albums",
+    "artists": "artists",
+    "playlists": "playlists",
+    "community": "community_playlists",
+}
+
+
+def _best_thumb(thumbs):
+    """Largest thumbnail URL from a YT Music thumbs list or inline dict."""
+    items = thumbs.get("thumbnails") if isinstance(thumbs, dict) else thumbs
+    if not items:
+        return ""
+    best = max(items, key=lambda t: t.get("width") or 0)
+    return best.get("url") or ""
+
+
+def _artist_names(item):
+    """Comma-joined artist names of a YT Music item."""
+    names = [a.get("name") for a in item.get("artists") or [] if a.get("name")]
+    return ", ".join(names) if names else "Unknown"
+
+
+def _ytm_track(item):
+    """A YT Music song flattened into the web track shape, or None."""
+    vid = item.get("videoId")
+    if not vid or item.get("isAvailable") is False:
+        return None
+    album = item.get("album")
+    if isinstance(album, dict):
+        album = album.get("name")
+    return {
+        "video_id": vid,
+        "title": item.get("title") or "Unknown",
+        "artist": _artist_names(item),
+        "album": album or "",
+        "duration": _duration_seconds(item),
+        "thumbnail": _best_thumb(item.get("thumbnails")),
+    }
+
+
+def _ytm_card(item):
+    """Shape any YT Music browse entry as a typed card, or None."""
+    vid = item.get("videoId")
+    if vid:
+        track = _ytm_track(item)
+        if not track:
+            return None
+        track["type"] = "video" if item.get("resultType") == "video" else "song"
+        views = item.get("view_count") or item.get("views")
+        if views:
+            track["views"] = views
+        return track
+    bid = item.get("browseId") or ""
+    if bid.startswith("MPREb"):
+        return {
+            "type": "album",
+            "album_id": bid,
+            "playlist_id": item.get("audioPlaylistId") or item.get("playlistId") or "",
+            "title": item.get("title") or "Unknown",
+            "artist": _artist_names(item),
+            "year": item.get("year") or "",
+            "thumbnail": _best_thumb(item.get("thumbnails")),
+        }
+    if item.get("resultType") == "artist" or bid.startswith("UC"):
+        return {
+            "type": "artist",
+            "artist_id": bid,
+            "title": item.get("artist") or item.get("name") or "Unknown",
+            "thumbnail": _best_thumb(item.get("thumbnails")),
+            "subscribers": item.get("subscribers") or "",
+        }
+    pid = item.get("playlistId") or item.get("audioPlaylistId") or (
+        bid if bid.startswith("VL") else ""
+    )
+    if pid:
+        return {
+            "type": "playlist",
+            "playlist_id": pid,
+            "title": item.get("title") or "Unknown",
+            "artist": item.get("author") or item.get("subtitle") or "",
+            "item_count": item.get("itemCount") or item.get("trackCount") or item.get("playlistLength") or "",
+            "thumbnail": _best_thumb(item.get("thumbnails")),
+        }
+    return None
+
+
+def _ytm_cards(entries, per=None):
+    """Typed cards from a list of raw browse entries, optionally capped."""
+    cards = []
+    for entry in entries or []:
+        card = _ytm_card(entry)
+        if card:
+            cards.append(card)
+        if per is not None and len(cards) >= per:
+            break
+    return cards
+
+
+def ytm_home(per_shelf=8, max_shelves=6):
+    """YT Music home shelves as titled sections of typed cards."""
+    try:
+        shelves = _get_ytmusic().get_home(limit=max_shelves)
+    except Exception as exc:
+        logger.warning("YT Music home failed: %s", exc)
+        return []
+    sections = []
+    for shelf in shelves or []:
+        cards = _ytm_cards(shelf.get("contents"), per=per_shelf)
+        if cards:
+            sections.append(
+                {"title": shelf.get("title") or "For You", "items": cards}
+            )
+    return sections[:max_shelves]
+
+
+def ytm_charts():
+    """YT Music charts: top-video chart playlists plus trending artists."""
+    try:
+        charts = _get_ytmusic().get_charts()
+    except Exception as exc:
+        logger.warning("YT Music charts failed: %s", exc)
+        return {"playlists": [], "artists": []}
+    playlists = []
+    for item in charts.get("videos") or []:
+        pid = item.get("playlistId")
+        if not pid:
+            continue
+        playlists.append(
+            {
+                "type": "playlist",
+                "playlist_id": pid,
+                "title": item.get("title") or "Top videos",
+                "artist": "YouTube Music Charts",
+                "thumbnail": _best_thumb(item.get("thumbnails")),
+            }
+        )
+    artists = []
+    for item in charts.get("artists") or []:
+        if not item.get("browseId"):
+            continue
+        artists.append(
+            {
+                "type": "artist",
+                "artist_id": item["browseId"],
+                "title": item.get("title") or "Unknown",
+                "thumbnail": _best_thumb(item.get("thumbnails")),
+                "subscribers": item.get("subscribers") or "",
+                "rank": str(item.get("rank") or ""),
+            }
+        )
+    return {"playlists": playlists, "artists": artists}
+
+
+def ytm_explore():
+    """YT Music explore: trending songs, new releases and mood/genre chips."""
+    try:
+        explore = _get_ytmusic().get_explore()
+    except Exception as exc:
+        logger.warning("YT Music explore failed: %s", exc)
+        return {"trending": [], "new_releases": [], "moods": []}
+    trending = _ytm_cards((explore.get("trending") or {}).get("items"))
+    releases = [
+        card
+        for card in _ytm_cards(explore.get("new_releases"))
+        if card.get("type") == "album"
+    ]
+    moods = [
+        {"title": item.get("title") or "", "params": item.get("params") or ""}
+        for item in explore.get("moods_and_genres") or []
+        if item.get("params")
+    ]
+    return {
+        "trending": trending[:20],
+        "new_releases": releases[:20],
+        "moods": moods,
+    }
+
+
+def ytm_mood_categories():
+    """All mood/genre categories flattened to {group,title,params} rows."""
+    try:
+        cats = _get_ytmusic().get_mood_categories()
+    except Exception as exc:
+        logger.warning("YT Music mood categories failed: %s", exc)
+        return []
+    rows = []
+    for group, items in cats.items():
+        for item in items:
+            if item.get("params"):
+                rows.append(
+                    {
+                        "group": group,
+                        "title": item.get("title") or "",
+                        "params": item["params"],
+                    }
+                )
+    return rows
+
+
+def ytm_mood_playlists(params):
+    """Community/RD playlists under one mood or genre category."""
+    try:
+        raw = _get_ytmusic().get_mood_playlists(params)
+    except Exception as exc:
+        logger.warning("YT Music mood playlists failed for %r: %s", params, exc)
+        return []
+    return _ytm_cards(raw)
+
+
+def ytm_playlist(playlist_id, limit=None):
+    """A YouTube Music playlist reshaped with its tracks as web rows."""
+    try:
+        ytm = _get_ytmusic()
+        info = ytm.get_playlist(playlist_id, limit=limit)
+    except Exception as exc:
+        logger.warning("YT Music playlist failed for %r: %s", playlist_id, exc)
+        return {}
+    author = info.get("author")
+    if isinstance(author, dict):
+        author = author.get("name") or ""
+    return {
+        "playlist_id": playlist_id,
+        "title": info.get("title") or "Unknown",
+        "author": author or "",
+        "description": (info.get("description") or "").strip(),
+        "track_count": info.get("trackCount") or 0,
+        "duration": info.get("duration") or "",
+        "year": info.get("year") or "",
+        "thumbnail": _best_thumb(info.get("thumbnails")),
+        "tracks": [c for c in _ytm_cards(info.get("tracks")) if c.get("video_id")],
+    }
+
+
+def ytm_album(album_id):
+    """A YouTube Music album reshaped with its tracks."""
+    try:
+        info = _get_ytmusic().get_album(album_id)
+    except Exception as exc:
+        logger.warning("YT Music album failed for %r: %s", album_id, exc)
+        return {}
+    artist = _artist_names(info)
+    thumb = _best_thumb(info.get("thumbnails"))
+    tracks = [c for c in _ytm_cards(info.get("tracks")) if c.get("video_id")]
+    for track in tracks:
+        if not track.get("thumbnail"):
+            track["thumbnail"] = thumb
+    return {
+        "album_id": album_id,
+        "playlist_id": info.get("audioPlaylistId") or "",
+        "title": info.get("title") or "Unknown",
+        "artist": artist,
+        "year": info.get("year") or "",
+        "track_count": info.get("trackCount") or 0,
+        "duration": info.get("duration") or "",
+        "description": (info.get("description") or "").strip(),
+        "thumbnail": thumb,
+        "tracks": tracks,
+    }
+
+
+def ytm_artist(artist_id):
+    """A YouTube Music artist page: top songs, videos and releases."""
+    try:
+        info = _get_ytmusic().get_artist(artist_id)
+    except Exception as exc:
+        logger.warning("YT Music artist failed for %r: %s", artist_id, exc)
+        return {}
+
+    def section(name):
+        items = (info.get(name) or {}).get("results") or []
+        first = items[0] if items else {}
+        if isinstance(first, dict) and first.get("title") in ("Top songs", "Videos"):
+            items = items[1:]
+        return _ytm_cards(items)
+
+    songs = [c for c in section("songs") if c.get("video_id")]
+    videos = [c for c in section("videos") if c.get("video_id")]
+    albums = [c for c in section("albums") if c.get("type") == "album"]
+    return {
+        "artist_id": artist_id,
+        "name": info.get("name") or "Unknown",
+        "description": (info.get("description") or "").strip(),
+        "subscribers": info.get("subscribers") or "",
+        "monthly_listeners": info.get("monthlyListeners") or "",
+        "thumbnail": _best_thumb(info.get("thumbnails")),
+        "shuffle_id": info.get("shuffleId") or "",
+        "radio_id": info.get("radioId") or "",
+        "songs": songs[:20],
+        "videos": videos[:20],
+        "albums": albums[:20],
+    }
+
+
+def ytm_search(query, filter_name=None, limit=10):
+    """YT Music search rows, optionally narrowed by a YTM_FILTERS name."""
+    try:
+        raw = _get_ytmusic().search(
+            query, filter=YTM_FILTERS.get(filter_name), limit=limit
+        )
+    except Exception as exc:
+        logger.warning("YT Music search failed for %r: %s", query, exc)
+        return []
+    rows = []
+    for item in raw or []:
+        card = _ytm_card(item)
+        if card:
+            rows.append(card)
+    return rows[:limit]

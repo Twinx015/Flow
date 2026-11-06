@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 import pathlib
+import tempfile
 import threading
 import time
 
@@ -276,6 +277,18 @@ def search():
         limit = min(int(request.args.get("limit", 10)), 25)
     except ValueError, TypeError:
         limit = 10
+    filt = request.args.get("filter", "").strip()
+    if filt:
+        try:
+            rows = youtube.ytm_search(q, filt, limit)
+        except Exception as exc:
+            logger.warning("YT Music search failed for %r: %s", q, exc)
+            devlog.log_error("FETCH", 500, "/search", "ytmusic", f"filter={filt} err={exc}")
+            return jsonify({"error": str(exc)}), 500
+        devlog.log_info(
+            "FETCH", 200, "/search", "ytmusic", f"query={q} filter={filt}"
+        )
+        return jsonify({"results": rows})
     return jsonify({"results": _cached_search(q, limit)})
 
 
@@ -297,6 +310,125 @@ def recommend():
         return jsonify({"results": _fetch_radio(vid, limit)})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+YTM_CACHE_TTL = 10 * 60
+_ytm_cache = {}
+
+
+def _ytm_cached(key, fn):
+    now = time.time()
+    hit = _ytm_cache.get(key)
+    if hit and now - hit[0] < YTM_CACHE_TTL:
+        return hit[1]
+    value = fn()
+    if len(_ytm_cache) > 50:
+        del _ytm_cache[next(iter(_ytm_cache))]
+    _ytm_cache[key] = (now, value)
+    return value
+
+
+def _ytm_arg(name):
+    value = request.args.get(name, "").strip()
+    if not value:
+        return None, (jsonify({"error": f"missing query parameter '{name}'"}), 400)
+    return value, None
+
+
+@app.route("/api/ytm/home")
+def api_ytm_home():
+    try:
+        sections = _ytm_cached("home", youtube.ytm_home)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"sections": sections})
+
+
+@app.route("/api/ytm/charts")
+def api_ytm_charts():
+    try:
+        charts = _ytm_cached("charts", youtube.ytm_charts)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(charts)
+
+
+@app.route("/api/ytm/explore")
+def api_ytm_explore():
+    try:
+        explore = _ytm_cached("explore", youtube.ytm_explore)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(explore)
+
+
+@app.route("/api/ytm/moods")
+def api_ytm_moods():
+    try:
+        moods = _ytm_cached("moods", youtube.ytm_mood_categories)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"moods": moods})
+
+
+@app.route("/api/ytm/mood-playlists")
+def api_ytm_mood_playlists():
+    params, err = _ytm_arg("params")
+    if err:
+        return err
+    try:
+        playlists = _ytm_cached(f"mood:{params}", lambda: youtube.ytm_mood_playlists(params))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"playlists": playlists})
+
+
+@app.route("/api/ytm/playlist")
+def api_ytm_playlist():
+    pid, err = _ytm_arg("id")
+    if err:
+        return err
+    try:
+        limit = int(request.args.get("limit", 0))
+    except ValueError, TypeError:
+        limit = 0
+    try:
+        data = _ytm_cached(
+            f"pl:{pid}:{limit}", lambda: youtube.ytm_playlist(pid, limit or None)
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    if not data:
+        return jsonify({"error": "playlist not found"}), 404
+    return jsonify(data)
+
+
+@app.route("/api/ytm/album")
+def api_ytm_album():
+    album_id, err = _ytm_arg("id")
+    if err:
+        return err
+    try:
+        data = _ytm_cached(f"album:{album_id}", lambda: youtube.ytm_album(album_id))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    if not data:
+        return jsonify({"error": "album not found"}), 404
+    return jsonify(data)
+
+
+@app.route("/api/ytm/artist")
+def api_ytm_artist():
+    artist_id, err = _ytm_arg("id")
+    if err:
+        return err
+    try:
+        data = _ytm_cached(f"artist:{artist_id}", lambda: youtube.ytm_artist(artist_id))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    if not data:
+        return jsonify({"error": "artist not found"}), 404
+    return jsonify(data)
 
 
 @app.route("/play")
@@ -859,6 +991,135 @@ def api_playlist_dedupe():
     return jsonify({"success": True, "removed": removed})
 
 
+DL_FMTS = ("webm", "opus", "m4a", "mp3")
+PL_DL_JOB_TTL = 15 * 60
+_playlist_dl_jobs = {}
+
+
+def _resolve_dl_fmt(fmt):
+    fmt = str(fmt or "").strip().lower() or config.FORMAT
+    if fmt not in DL_FMTS:
+        fmt = config.FORMAT
+    if fmt not in DL_FMTS or (fmt != "webm" and not config.FFMPEG):
+        fmt = "webm"
+    return fmt
+
+
+def _playlist_dl_snapshot(job):
+    return {k: v for k, v in job.items() if k != "queue"}
+
+
+def _playlist_dl_worker(actual):
+    job = _playlist_dl_jobs.get(actual)
+    if not job:
+        return
+    for item in job["queue"]:
+        if _playlist_dl_jobs.get(actual) is not job:
+            return
+        vid, url = item["video_id"], item["url"]
+        local = playlist.local_path_of(item["track"])
+        if local:
+            playlist.backfill_local(actual, item["index"], local)
+            job["skipped"] += 1
+            job["done"] += 1
+            continue
+        try:
+            filename = youtube.download_url(url, config.DOWNLOAD_DIR, fmt=job["format"])
+        except Exception as exc:
+            job["failed"] += 1
+            logger.warning(
+                "Playlist download failed: %s (%s)", _truncate_title(item["title"]), exc
+            )
+            devlog.log_error(
+                "FETCH", 500, "/api/playlist/download", "yt_dlp", f"vid={vid} err={exc}"
+            )
+        else:
+            playlist.backfill_local(actual, item["index"], str(filename))
+            job["ok"] += 1
+            job["files"].append(str(filename))
+        job["done"] += 1
+    job["running"] = False
+    job["finished"] = time.time()
+    devlog.log_success(
+        "FETCH",
+        200,
+        "/api/playlist/download",
+        "yt_dlp",
+        f"{actual}: {job['ok']} ok, {job['failed']} failed",
+    )
+
+
+@app.route("/api/playlist/download", methods=["POST"])
+def api_playlist_download():
+    """Queue a background download of every track in one playlist."""
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    actual, err = _resolve_playlist_or_error(name)
+    if err:
+        return err
+    running = _playlist_dl_jobs.get(actual)
+    if running and running["running"]:
+        return jsonify(
+            {"success": True, "total": running["total"], "running": True, "name": name}
+        )
+    queue = []
+    for idx, s in enumerate(playlist.get(actual)):
+        vid = s.get("id", "")
+        if not vid:
+            continue
+        queue.append(
+            {
+                "video_id": vid,
+                "url": s.get("ref", "") or f"https://www.youtube.com/watch?v={vid}",
+                "title": s.get("title", "Unknown"),
+                "index": idx,
+                "track": s,
+            }
+        )
+    if not queue:
+        return jsonify({"error": "no online tracks to download"}), 400
+    job = {
+        "name": name,
+        "total": len(queue),
+        "done": 0,
+        "ok": 0,
+        "skipped": 0,
+        "failed": 0,
+        "running": True,
+        "format": _resolve_dl_fmt(data.get("format")),
+        "files": [],
+        "started": time.time(),
+        "queue": queue,
+    }
+    finished = [n for n, j in _playlist_dl_jobs.items() if not j["running"]]
+    for n in finished[: max(0, len(_playlist_dl_jobs) - 7)]:
+        _playlist_dl_jobs.pop(n, None)
+    _playlist_dl_jobs[actual] = job
+    threading.Thread(
+        target=_playlist_dl_worker, args=(actual,), name="playlist-dl", daemon=True
+    ).start()
+    return jsonify(
+        {"success": True, "total": len(queue), "name": name, "format": job["format"]}
+    )
+
+
+@app.route("/api/playlist/download")
+def api_playlist_download_status():
+    now = time.time()
+    for n in list(_playlist_dl_jobs):
+        job = _playlist_dl_jobs[n]
+        if not job["running"] and now - job["finished"] > PL_DL_JOB_TTL:
+            del _playlist_dl_jobs[n]
+    jobs = {}
+    for n, job in list(_playlist_dl_jobs.items()):
+        exists = playlist.resolve_name(n)
+        if exists is None:
+            del _playlist_dl_jobs[n]
+            continue
+        jobs[n] = _playlist_dl_snapshot(job)
+    return jsonify({"jobs": jobs})
+
+
 @app.route("/api/playlist/export")
 def api_playlist_export():
     from io import BytesIO
@@ -881,6 +1142,37 @@ def api_playlist_export():
         as_attachment=True,
         download_name=filename,
     )
+
+
+@app.route("/api/playlist/import", methods=["POST"])
+def api_playlist_import():
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return jsonify({"error": "missing file"}), 400
+    name = (request.form.get("name") or "").strip()
+    suffix = pathlib.Path(upload.filename).suffix or ".m3u"
+    with tempfile.TemporaryDirectory(prefix="flow-import-") as tmp:
+        path = pathlib.Path(tmp) / ("playlist" + suffix)
+        upload.save(str(path))
+        try:
+            result = playlist.import_m3u(
+                path, name or pathlib.Path(upload.filename).stem
+            )
+        except Exception as exc:
+            logger.warning("Playlist import failed for %s: %s", upload.filename, exc)
+            devlog.log_error("LIB", 500, "/api/playlist/import", "flow", f"err={exc}")
+            return jsonify({"error": str(exc)}), 500
+    if result is None:
+        return jsonify({"error": "could not import playlist file"}), 400
+    imported_name, count = result
+    devlog.log_success(
+        "LIB",
+        200,
+        "/api/playlist/import",
+        "flow",
+        f"{upload.filename} -> {count} into {imported_name}",
+    )
+    return jsonify({"success": True, "name": imported_name, "count": count})
 
 
 @app.route("/api/playlists/create", methods=["POST"])

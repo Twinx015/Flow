@@ -23,6 +23,9 @@
                 <button class="nav-item active" data-panel="home">
                     <i class="bi bi-house"></i><span>Home</span>
                 </button>
+                <button class="nav-item" data-panel="explore">
+                    <i class="bi bi-compass"></i><span>Explore</span>
+                </button>
                 <button class="nav-item" data-panel="local">
                     <i class="bi bi-hdd"></i><span>Local</span>
                 </button>
@@ -39,14 +42,29 @@
             <hr class="sidebar-divider" />
             <div class="sidebar-section-header">
                 <span>Playlists</span>
-                <button
-                    id="newPlaylistBtn"
-                    class="icon-btn-sm"
-                    title="New playlist"
-                >
-                    <i class="bi bi-plus-lg"></i>
-                </button>
+                <div class="sidebar-section-actions">
+                    <button
+                        id="importPlaylistBtn"
+                        class="icon-btn-sm"
+                        title="Import M3U playlist"
+                    >
+                        <i class="bi bi-box-arrow-in-down"></i>
+                    </button>
+                    <button
+                        id="newPlaylistBtn"
+                        class="icon-btn-sm"
+                        title="New playlist"
+                    >
+                        <i class="bi bi-plus-lg"></i>
+                    </button>
+                </div>
             </div>
+            <input
+                id="importPlaylistFile"
+                type="file"
+                accept=".m3u,.m3u8,audio/x-mpegurl,text/plain"
+                class="hidden"
+            />
             <div id="sidebarPlaylists" class="sidebar-playlists"></div>
         </aside>
 
@@ -91,7 +109,22 @@
                 </div>
             </div>
 
+            <div class="panel" id="panelExplore">
+                <div id="exploreSections"></div>
+            </div>
+
             <div class="panel" id="panelSearch">
+                <div id="ytmFilters" class="ytm-filters">
+                    <button class="filt-chip active" data-filter="">
+                        All
+                    </button>
+                    <button class="filt-chip" data-filter="songs">Songs</button>
+                    <button class="filt-chip" data-filter="videos">Videos</button>
+                    <button class="filt-chip" data-filter="albums">Albums</button>
+                    <button class="filt-chip" data-filter="artists">Artists</button>
+                    <button class="filt-chip" data-filter="playlists">Playlists</button>
+                    <button class="filt-chip" data-filter="community">Community</button>
+                </div>
                 <div id="resultsContainer" class="song-list"></div>
             </div>
 
@@ -168,6 +201,12 @@
             <div class="panel" id="panelPlaylistDetail">
                 <div id="playlistDetailContent" class="song-list"></div>
             </div>
+
+            <div class="panel" id="panelBrowse">
+                <div id="browseHead"></div>
+                <div id="browseSongs" class="song-list"></div>
+                <div id="browseExtra" class="browse-extra"></div>
+            </div>
         </main>
 
         <footer id="playerBar">
@@ -210,6 +249,9 @@
                 </div>
             </div>
             <div class="pb-right">
+                <button id="fsOpenBtn" class="ctrl-btn" title="Full screen (f)">
+                    <i class="bi bi-arrows-fullscreen"></i>
+                </button>
                 <button id="lyricsBtn" class="ctrl-btn" title="Lyrics (l)">
                     <i class="bi bi-text-paragraph"></i>
                 </button>
@@ -231,6 +273,59 @@
                 </div>
             </div>
         </footer>
+
+        <div id="fsPlayer" class="modal-overlay fs-player" tabindex="-1">
+            <button id="fsCloseBtn" class="icon-btn fs-close" title="Close (Esc)">
+                <i class="bi bi-x-lg"></i>
+            </button>
+            <div class="fs-grid">
+                <section class="fs-left">
+                    <img id="fsArt" class="fs-art" src="/static/Logo.png" alt="" />
+                    <div class="fs-meta">
+                        <span id="fsTag" class="browse-tag">Now Playing</span>
+                        <h2 id="fsTitle" class="fs-title">Flow Music</h2>
+                        <span id="fsArtist" class="fs-artist"></span>
+                    </div>
+                    <div class="fs-progress">
+                        <span id="fsCur" class="time-label">0:00</span>
+                        <div id="fsBar" class="progress-track">
+                            <div id="fsFill" class="progress-fill"></div>
+                        </div>
+                        <span id="fsTot" class="time-label">0:00</span>
+                    </div>
+                    <div class="fs-controls">
+                        <button id="fsShuffleBtn" class="ctrl-btn" title="Shuffle">
+                            <i class="bi bi-shuffle"></i>
+                        </button>
+                        <button id="fsPrevBtn" class="ctrl-btn" title="Previous">
+                            <i class="bi bi-skip-start-fill"></i>
+                        </button>
+                        <button id="fsPlayBtn" class="ctrl-btn play-btn" title="Play/Pause">
+                            <i class="bi bi-play-fill"></i>
+                        </button>
+                        <button id="fsNextBtn" class="ctrl-btn" title="Next">
+                            <i class="bi bi-skip-end-fill"></i>
+                        </button>
+                        <button id="fsRepeatBtn" class="ctrl-btn" title="Repeat">
+                            <i class="bi bi-repeat"></i>
+                        </button>
+                        <button id="fsLikeBtn" class="ctrl-btn" title="Like">
+                            <i class="bi bi-heart"></i>
+                        </button>
+                    </div>
+                </section>
+                <aside class="fs-right">
+                    <div class="fs-lyrics-head">
+                        <span class="browse-tag">LYRICS</span>
+                        <span id="fsLyricsSource" class="lyrics-source"></span>
+                        <button id="fsReloadLyricsBtn" class="icon-btn" title="Reload">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                    <div id="fsLyricsBody" class="fs-lyrics-body"></div>
+                </aside>
+            </div>
+        </div>
 
         <div id="settingsModal" class="modal-overlay">
             <div class="modal">

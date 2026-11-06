@@ -29,6 +29,7 @@ M = config.Muted
 E = config.RED
 G = config.GREY
 R = config.Reset
+config.keep_live(globals())
 
 m = lambda t: print(f"{M}{t}{R}")
 e = lambda t: print(f"{E}{t}{R}")
@@ -186,6 +187,10 @@ def run(cmd: str, extra: list[str], args):
         search(" ".join(extra) if extra else "")
     elif cmd == "import":
         e("Import needs online mode — run `switch` first")
+    elif cmd in ("scrobbler", "scr"):
+        from backend.scrobbler import cli as scrobbler_cli
+
+        scrobbler_cli.handle(extra)
     elif cmd == "list":
         list_library()
     elif cmd in ("radio", "rd"):

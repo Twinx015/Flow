@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 CONFIG_FILE = pathlib.Path.home() / ".flow/config.json"
+COLOR_FILE = pathlib.Path.home() / ".flow/color.json"
 
 SIG_STOP = getattr(_signal, "SIGUSR1", None)
 SIG_NEXT = getattr(_signal, "SIGUSR2", None)
@@ -79,13 +80,22 @@ except Exception:
     _HAS_RICH = False
 
 
+def _norm_style(value):
+    """Collapse whitespace inside rgb()/hsl() (rich's parser wants rgb(1,2,3))."""
+    return re.sub(
+        r"(rgb|hsl)\(([^)]*)\)",
+        lambda m: f"{m.group(1)}({''.join(m.group(2).split())})",
+        str(value).strip(),
+    )
+
+
 def _sgr(style):
     """Render a rich style string to its ANSI SGR prefix."""
     if not _HAS_RICH:
         return ""
     try:
         with _FORCE.capture() as cap:
-            _FORCE.print("\u2593", style=str(style), end="")
+            _FORCE.print("\u2593", style=_norm_style(style), end="")
         out = cap.get()
         if out.endswith("\x1b[0m"):
             out = out[:-4]
@@ -113,7 +123,7 @@ def _valid_style(value):
             "pink",
         )
     try:
-        _RichStyle.parse(str(value))
+        _RichStyle.parse(_norm_style(value))
         return True
     except Exception:
         return False
@@ -160,11 +170,29 @@ _TARGET_ALIASES = {
     "progtype": "progress_type",
     "richspin": "rich_spinner",
     "rich_spin": "rich_spinner",
+    "customcolor": "custom_color",
+    "cc": "custom_color",
+    "refresh": "reload",
+    "rr": "reload",
+    "clearcolors": "clear_colors",
+    "ccol": "clear_colors",
+    "pri_color": "primary_color",
+    "pricolor": "primary_color",
+    "sec_color": "secondary_color",
+    "seccolor": "secondary_color",
+    "ter_color": "tertiary_color",
+    "tercolor": "tertiary_color",
 }
 _TARGETS = {
     "primary",
     "secondary",
     "tertiary",
+    "custom_color",
+    "primary_color",
+    "secondary_color",
+    "tertiary_color",
+    "reload",
+    "clear_colors",
     "display",
     "progress_columns",
     "progress_type",
@@ -175,6 +203,41 @@ _BAR_SPACING = {"min", "fit", "max"}
 
 _STYLE = {"primary": "cyan", "secondary": "purple", "tertiary": "blue"}
 
+_CUSTOM_COLOR_KEYS = (
+    ("primary_color", "primary"),
+    ("secondary_color", "secondary"),
+    ("tertiary_color", "tertiary"),
+)
+_CUSTOM = {"primary": None, "secondary": None, "tertiary": None}
+_custom_mtime = None
+_color_mtime = None
+
+
+_LIVE_NAMESPACES = []
+_ALIAS_SOURCES = {
+    "P": "Primary",
+    "S": "Secondary",
+    "T": "Tertiary",
+    "M": "Muted",
+    "G": "GREY",
+    "E": "RED",
+    "R": "Reset",
+}
+
+
+def keep_live(ns):
+    """Register a module globals() so its P/S/T/… color aliases re-bind on every _render()."""
+    if ns not in _LIVE_NAMESPACES:
+        _LIVE_NAMESPACES.append(ns)
+
+
+def _sync_aliases():
+    """Re-bind the snapshot color aliases (P, S, T, …) in all registered namespaces."""
+    for ns in _LIVE_NAMESPACES:
+        for alias, source in _ALIAS_SOURCES.items():
+            if alias in ns:
+                ns[alias] = globals()[source]
+
 
 def _render():
     """Recompute Primary/Secondary/Tertiary ANSI from the chosen rich styles."""
@@ -182,8 +245,23 @@ def _render():
     Primary = _sgr(_STYLE["primary"]) or CYAN
     Secondary = _sgr(_STYLE["secondary"]) or PURPLE
     Tertiary = _sgr(_STYLE["tertiary"]) or BLUE
+    if CustomColor:
+        for slot, fallback in (
+            ("primary", Primary),
+            ("secondary", Secondary),
+            ("tertiary", Tertiary),
+        ):
+            style = _sgr(_CUSTOM[slot]) if _CUSTOM[slot] else None
+            if slot == "primary":
+                Primary = style or fallback
+            elif slot == "secondary":
+                Secondary = style or fallback
+            else:
+                Tertiary = style or fallback
+    _sync_aliases()
 
 
+CustomColor = False
 Primary = _sgr("cyan")
 Secondary = _sgr("purple")
 Tertiary = _sgr("blue")
@@ -660,6 +738,71 @@ def _truncate_title(title):
     return result + "..." if len(words) > MAX_WORDS else result
 
 
+def _load_colors():
+    """Read the three custom colors from ~/.flow/color.json into `_CUSTOM`."""
+    global _color_mtime
+    if not COLOR_FILE.exists():
+        return
+    try:
+        data = json.loads(COLOR_FILE.read_text())
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    for key, slot in _CUSTOM_COLOR_KEYS:
+        val = data.get(key)
+        val = str(val).strip() if isinstance(val, str) else ""
+        _CUSTOM[slot] = val if val and _valid_style(val) else None
+    try:
+        _color_mtime = COLOR_FILE.stat().st_mtime_ns
+    except OSError:
+        pass
+
+
+def _save_colors():
+    """Write the three custom colors back to ~/.flow/color.json (merge mode)."""
+    global _color_mtime
+    COLOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if COLOR_FILE.exists():
+        try:
+            loaded = json.loads(COLOR_FILE.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            pass  # unreadable file gets rewritten with just our keys
+    for key, slot in _CUSTOM_COLOR_KEYS:
+        data[key] = _CUSTOM[slot] or ""
+    COLOR_FILE.write_text(json.dumps(data, indent=2))
+    try:
+        _color_mtime = COLOR_FILE.stat().st_mtime_ns
+    except OSError:
+        pass
+
+
+def _apply_reload():
+    """`config reload` — force re-read config.json + color.json right now."""
+    _load_config()
+    return (
+        f"{Tertiary}Colors reloaded from disk{Reset} {Muted}"
+        f"({'custom_color' if CustomColor else 'custom_color is off'}){Reset}"
+    )
+
+
+def _apply_clear_colors():
+    """`config clear_colors` — drop all custom overrides, back to the theme."""
+    for slot in _CUSTOM:
+        _CUSTOM[slot] = None
+    _render()
+    _save_colors()
+    if CustomColor:
+        return (
+            f"{Tertiary}Custom colors cleared{Reset} {Muted}"
+            f"— every slot uses the theme now (color.json emptied){Reset}"
+        )
+    return f"{Tertiary}Custom colors cleared{Reset} {Muted}— color.json emptied{Reset}"
+
+
 def _load_config():
     global \
         Primary, \
@@ -686,9 +829,12 @@ def _load_config():
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO, \
         SearchSource, \
-        ApiUrl, \
         NOTIFY, \
-        ProgressColumns
+        ScrobbleBackend, \
+        LastfmUsername, \
+        ListenbrainzUsername, \
+        ProgressColumns, \
+        CustomColor
     if not CONFIG_FILE.exists():
         return
     try:
@@ -699,6 +845,14 @@ def _load_config():
             _STYLE["secondary"] = str(data["secondary"])
         if "tertiary" in data and _valid_style(data["tertiary"]):
             _STYLE["tertiary"] = str(data["tertiary"])
+        if "custom_color" in data and isinstance(data["custom_color"], bool):
+            CustomColor = data["custom_color"]
+        try:
+            global _custom_mtime
+            _custom_mtime = CONFIG_FILE.stat().st_mtime_ns
+        except OSError:
+            pass
+        _load_colors()
         _render()
         if "display" in data and data["display"] in _DISPLAY_MODES:
             Display = data["display"]
@@ -804,8 +958,14 @@ def _load_config():
             MAX_RESULTS_RADIO = data["max_radio"]
         if data.get("search_source") in ("youtube", "ytmusic"):
             SearchSource = data["search_source"]
-        if isinstance(data.get("api_url"), str):
-            ApiUrl = data["api_url"].strip()
+        if data.get("scrobble_backend") in ("lastfm", "listenbrainz", ""):
+            ScrobbleBackend = data["scrobble_backend"]
+        for _ukey, _uglobal in (
+            ("lastfm_username", "LastfmUsername"),
+            ("listenbrainz_username", "ListenbrainzUsername"),
+        ):
+            if isinstance(data.get(_ukey), str):
+                globals()[_uglobal] = data[_ukey].strip()
     except (json.JSONDecodeError, OSError):
         pass
 
@@ -816,6 +976,7 @@ def _save_config():
         "primary": _STYLE["primary"],
         "secondary": _STYLE["secondary"],
         "tertiary": _STYLE["tertiary"],
+        "custom_color": CustomColor,
         "display": Display,
         "progress_columns": ProgressColumns,
         "progress_type": ProgressType,
@@ -838,9 +999,58 @@ def _save_config():
         "max_search": MAX_SEARCH_RESULTS,
         "max_radio": MAX_RESULTS_RADIO,
         "search_source": SearchSource,
-        "api_url": ApiUrl,
+        "scrobble_backend": ScrobbleBackend,
+        "lastfm_username": LastfmUsername,
+        "listenbrainz_username": ListenbrainzUsername,
     }
     CONFIG_FILE.write_text(json.dumps(data, indent=2))
+    try:
+        global _custom_mtime
+        _custom_mtime = CONFIG_FILE.stat().st_mtime_ns
+    except OSError:
+        pass
+
+
+def maybe_reload():
+    """Hot-reload custom_color (config.json) and the colors (color.json).
+
+    Called from the display loops (and the shell prompt); mtime-stat only,
+    so polling costs nothing, and the first sighting of a file also applies
+    it (handles color.json being created after flow started).
+    """
+    global _custom_mtime, _color_mtime, CustomColor
+    changed = False
+    if CONFIG_FILE.exists():
+        try:
+            mtime = CONFIG_FILE.stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        if mtime is not None and (_custom_mtime is None or mtime != _custom_mtime):
+            _custom_mtime = mtime
+            try:
+                data = json.loads(CONFIG_FILE.read_text())
+            except Exception:
+                data = {}
+            if "primary" in data and _valid_style(data["primary"]):
+                _STYLE["primary"] = str(data["primary"])
+            if "secondary" in data and _valid_style(data["secondary"]):
+                _STYLE["secondary"] = str(data["secondary"])
+            if "tertiary" in data and _valid_style(data["tertiary"]):
+                _STYLE["tertiary"] = str(data["tertiary"])
+            CustomColor = bool(data.get("custom_color"))
+            _load_colors()
+            changed = True
+    if COLOR_FILE.exists():
+        try:
+            mtime = COLOR_FILE.stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        if mtime is not None and (_color_mtime is None or mtime != _color_mtime):
+            _color_mtime = mtime
+            _load_colors()
+            changed = True
+    if changed:
+        _render()
 
 
 DOWNLOAD_DIR = pathlib.Path.home() / ".flow/downloads"
@@ -858,7 +1068,9 @@ Mode = "Online"
 MAX_RESULTS_RADIO = 35
 MAX_SEARCH_RESULTS = 5
 SearchSource = "ytmusic"
-ApiUrl = ""
+ScrobbleBackend = ""
+LastfmUsername = ""
+ListenbrainzUsername = ""
 
 PID_FILE = pathlib.Path.home() / ".flow/vlc.pid"
 SEEK_FILE = pathlib.Path.home() / ".flow/seek.txt"
@@ -985,7 +1197,49 @@ def _apply_color(which, value):
     _render()
     _save_config()
     code = {"primary": Primary, "secondary": Secondary, "tertiary": Tertiary}[which]
-    return f"{code}{which.capitalize()} color changed to {value}{Reset}"
+    tail = (
+        f" {Muted}(custom_color is on — this only feeds empty slots){Reset}"
+        if CustomColor
+        else ""
+    )
+    return f"{code}{which.capitalize()} color changed to {value}{Reset}{tail}"
+
+
+def _apply_custom_color(value):
+    global CustomColor
+    v = str(value or "").strip().lower()
+    if v in ("true", "on", "yes"):
+        CustomColor = True
+    elif v in ("false", "off", "no", ""):
+        CustomColor = False
+    else:
+        return "Usage: config custom_color true/false"
+    _render()
+    _save_config()
+    if CustomColor:
+        return (
+            f"{Primary}Custom colors on{Reset} {Muted}— Primary/Secondary/Tertiary now "
+            f"come from primary_color/secondary_color/tertiary_color (falling back to "
+            f"the theme for any unset one){Reset}"
+        )
+    return f"{Tertiary}Custom colors off{Reset}"
+
+
+def _apply_custom_color_slot(slot, value):
+    v = str(value or "").strip()
+    if v and not _valid_style(v):
+        return (
+            f"Unknown color '{v}'. Any rich style works: a named color, "
+            "#hex, rgb(r,g,b), bold/italic."
+        )
+    _CUSTOM[slot] = v or None
+    _render()
+    _save_colors()
+    label = f"{slot}_color set to {v}" if v else f"{slot}_color cleared"
+    if not CustomColor:
+        return f"{Tertiary}{label}{Reset} {Muted}— enable with config custom_color true{Reset}"
+    code = {"primary": Primary, "secondary": Secondary, "tertiary": Tertiary}[slot]
+    return f"{code}{label}{Reset}"
 
 
 def _apply_display(value):
@@ -1176,18 +1430,6 @@ def _apply_theme(name):
     return f"{Tertiary}Theme changed to '{name}'{Reset}"
 
 
-def _apply_api(value):
-    """`api_url` — push target for /now and /summary; empty disables."""
-    global ApiUrl
-    value = str(value or "").strip()
-    if value and not value.startswith(("http://", "https://")):
-        return f"{RED}api must be an http(s) URL (or empty to disable){Reset}"
-    ApiUrl = value
-    _save_config()
-    label = f"set to {value}" if value else "disabled"
-    return f"{Tertiary}API push {label}{Reset}"
-
-
 def _apply_format(value):
     if not set_format(value):
         if value not in _VALID_FORMATS:
@@ -1203,6 +1445,10 @@ PLUGIN_SAFE_KEYS = {
     "primary",
     "secondary",
     "tertiary",
+    "custom_color",
+    "primary_color",
+    "secondary_color",
+    "tertiary_color",
     "theme",
     "spinner",
     "rich_spinner",
@@ -1222,7 +1468,9 @@ PLUGIN_SAFE_KEYS = {
     "ad_skip",
     "down_on_like",
     "notify",
-    "api",
+    "scrobble_backend",
+    "reload",
+    "clear_colors",
 }
 
 
@@ -1245,6 +1493,18 @@ def apply_config(key, value):
         return _apply_color("secondary", value)
     if target == "tertiary":
         return _apply_color("tertiary", value)
+    if target == "custom_color":
+        return _apply_custom_color(value)
+    if target == "primary_color":
+        return _apply_custom_color_slot("primary", value)
+    if target == "secondary_color":
+        return _apply_custom_color_slot("secondary", value)
+    if target == "tertiary_color":
+        return _apply_custom_color_slot("tertiary", value)
+    if target == "reload":
+        return _apply_reload()
+    if target == "clear_colors":
+        return _apply_clear_colors()
     if target == "display":
         return _apply_display(value)
     if target == "progress_columns":
@@ -1297,8 +1557,6 @@ def apply_config(key, value):
         )
     if target in ("max_radio", "maxradio"):
         return _apply_int("MAX_RESULTS_RADIO", value, 1, 50, "Max radio tracks changed")
-    if target == "api":
-        return _apply_api(value)
     return f"Unknown config key '{key}'"
 
 
@@ -1316,6 +1574,10 @@ def config_get(key):
         "primary": lambda: _STYLE["primary"],
         "secondary": lambda: _STYLE["secondary"],
         "tertiary": lambda: _STYLE["tertiary"],
+        "custom_color": lambda: CustomColor,
+        "primary_color": lambda: _CUSTOM["primary"] or "",
+        "secondary_color": lambda: _CUSTOM["secondary"] or "",
+        "tertiary_color": lambda: _CUSTOM["tertiary"] or "",
         "theme": _current_theme,
         "spinner": lambda: SPINNER,
         "rich_spinner": lambda: RichSpinner,
@@ -1337,8 +1599,10 @@ def config_get(key):
         "max_search": lambda: MAX_SEARCH_RESULTS,
         "max_radio": lambda: MAX_RESULTS_RADIO,
         "search_source": lambda: SearchSource,
-        "api": lambda: ApiUrl,
-        "api_url": lambda: ApiUrl,
+        "scrobble": lambda: ScrobbleBackend,
+        "scrobbler": lambda: ScrobbleBackend,
+        "lastfm_user": lambda: LastfmUsername,
+        "lb_user": lambda: ListenbrainzUsername,
     }
     getter = getters.get(target)
     if getter is None:
@@ -1379,7 +1643,10 @@ def cmd_config(extra: list[str], args=None):
         MAX_SEARCH_RESULTS, \
         MAX_RESULTS_RADIO, \
         SearchSource, \
-        NOTIFY
+        NOTIFY, \
+        ScrobbleBackend, \
+        LastfmUsername, \
+        ListenbrainzUsername
     if extra and (extra[0] in ("help", "-h")):
         print(f"{Tertiary}Available targets:{Reset}")
         print(f"  {Primary}primary{Reset}   (aliases: pri)")
@@ -1411,6 +1678,20 @@ def cmd_config(extra: list[str], args=None):
             f"  {GREY}theme{Reset}      (ocean, sunset, forest, fire, mono, royal — or 'list')"
         )
         print(
+            f"  {GREY}custom_color{Reset} (true/false — take Primary/Secondary/Tertiary from "
+            f"~/.flow/color.json when on; current: {'on' if CustomColor else 'off'})"
+        )
+        print(
+            f"  {GREY}primary_color{Reset} / secondary_color / tertiary_color (any rich style: "
+            f"named color, #hex, rgb(r,g,b), bold/italic — stored in ~/.flow/color.json)"
+        )
+        print(
+            f"  {GREY}reload{Reset}      (force re-read config.json + color.json from disk right now)"
+        )
+        print(
+            f"  {GREY}clear_colors{Reset} (drop every custom color — every slot back to the theme)"
+        )
+        print(
             f"  {GREY}rich_spinner{Reset} (rich spinner — a name from `python -m "
             f"rich.spinner`, or 1-16 custom chars; current: {RichSpinner})"
         )
@@ -1435,8 +1716,8 @@ def cmd_config(extra: list[str], args=None):
             f"Tile-truncates titles; ytmusic keeps them as-is, current: {SearchSource})"
         )
         print(
-            f"  {GREY}api{Reset}         (http(s) URL that flow POSTs /now and /summary "
-            f"play state to; empty disables, current: {ApiUrl or 'disabled'})"
+            f"  {GREY}scrobble{Reset}      (lastfm/listenbrainz/off — track scrobbling backend, "
+            f"current: {ScrobbleBackend or 'off'}; secrets live in the OS keyring, see `flow scrobbler --help`)"
         )
         print(
             f"\n{Tertiary}Available colors (any rich style: named color, #hex, rgb(r,g,b), bold/italic):{Reset}"
@@ -1448,11 +1729,14 @@ def cmd_config(extra: list[str], args=None):
     if not extra:
         _interactive_config()
         return
-    if len(extra) < 2:
+    target = _TARGET_ALIASES.get(extra[0].lower(), extra[0].lower())
+    if target in ("reload", "clear_colors"):
+        value = ""
+    elif len(extra) < 2:
         print(f"Usage: config <target> <value>{Reset}")
         return
-    target = _TARGET_ALIASES.get(extra[0].lower(), extra[0].lower())
-    value = extra[1].lower()
+    else:
+        value = extra[1].lower()
 
     def emit(msg):
         print(msg)
@@ -1532,6 +1816,23 @@ def cmd_config(extra: list[str], args=None):
         NOTIFY = value == "true"
         _save_config()
         print(f"{Tertiary}Desktop notifications set to {NOTIFY}{Reset}")
+    elif target in ("scrobble", "scrobbler"):
+        backends = {"lastfm": "lastfm", "listenbrainz": "listenbrainz",
+                    "lb": "listenbrainz", "lf": "lastfm", "off": "", "": ""}
+        if value not in backends:
+            print("Usage: config scrobble lastfm/listenbrainz/off")
+            return
+        ScrobbleBackend = backends[value]
+        _save_config()
+        print(f"{Tertiary}Scrobbler {'disabled' if not ScrobbleBackend else 'set to ' + ScrobbleBackend}{Reset}")
+    elif target in ("lastfm_user", "lastfm_username"):
+        LastfmUsername = " ".join(extra[1:]).strip()
+        _save_config()
+        print(f"{Tertiary}Last.fm username set to {LastfmUsername or '(empty)'}{Reset}")
+    elif target in ("lb_user", "listenbrainz_username"):
+        ListenbrainzUsername = " ".join(extra[1:]).strip()
+        _save_config()
+        print(f"{Tertiary}ListenBrainz username set to {ListenbrainzUsername or '(empty)'}{Reset}")
     elif target in ("max_search", "maxresults"):
         print(
             _apply_int("MAX_SEARCH_RESULTS", value, 1, 20, "Max search results changed")
@@ -1556,11 +1857,20 @@ def cmd_config(extra: list[str], args=None):
             )
         except Exception:
             pass
-    elif target in ("api", "api_url", "apiurl"):
-        raw = extra[1] if len(extra) > 1 else value
-        print(_apply_api(raw))
     elif target == "theme":
         print(_apply_theme(value))
+    elif target == "custom_color":
+        print(_apply_custom_color(value))
+    elif target == "primary_color":
+        print(_apply_custom_color_slot("primary", value))
+    elif target == "secondary_color":
+        print(_apply_custom_color_slot("secondary", value))
+    elif target == "tertiary_color":
+        print(_apply_custom_color_slot("tertiary", value))
+    elif target == "reload":
+        print(_apply_reload())
+    elif target == "clear_colors":
+        print(_apply_clear_colors())
     elif target == "spinner":
         print(_apply_spinner(value))
     else:
@@ -1681,6 +1991,38 @@ def _interactive_rows():
             "select",
             sorted(THEMES),
             lambda v: _apply_theme(str(v)),
+        ),
+        (
+            "custom_color",
+            "Custom colors on/off (takes colors from color.json)",
+            lambda: bool(CustomColor),
+            "confirm",
+            None,
+            _apply_custom_color,
+        ),
+        (
+            "primary_color",
+            "Custom primary color (~/.flow/color.json; #hex / rgb / name)",
+            lambda: _CUSTOM["primary"] or "",
+            "text",
+            None,
+            lambda v: _apply_custom_color_slot("primary", str(v)),
+        ),
+        (
+            "secondary_color",
+            "Custom secondary color (~/.flow/color.json)",
+            lambda: _CUSTOM["secondary"] or "",
+            "text",
+            None,
+            lambda v: _apply_custom_color_slot("secondary", str(v)),
+        ),
+        (
+            "tertiary_color",
+            "Custom tertiary color (~/.flow/color.json)",
+            lambda: _CUSTOM["tertiary"] or "",
+            "text",
+            None,
+            lambda v: _apply_custom_color_slot("tertiary", str(v)),
         ),
         spinner_row,
         (
@@ -1824,10 +2166,16 @@ def _interactive_rows():
         ]
     else:
         rows = [r for r in rows if r[0] not in ("progress_columns", "progress_type")]
+    if CustomColor:
+        # theme rows are inert while custom_color feeds the colors
+        rows = [
+            r for r in rows if r[0] not in ("primary", "secondary", "tertiary", "theme")
+        ]
     return rows
 
 
 def _interactive_config():
+    maybe_reload()
     try:
         import questionary
         from questionary import Style
@@ -1841,14 +2189,14 @@ def _interactive_config():
 
     py_style = Style(
         [
-            ("qmark", f"fg:{_cname(_STYLE['tertiary'])}"),
-            ("question", f"fg:{_cname(_STYLE['tertiary'])}"),
-            ("answer", f"fg:{_cname(_STYLE['secondary'])} bold"),
-            ("pointer", f"fg:{_cname(_STYLE['primary'])} bold"),
-            ("highlighted", f"fg:{_cname(_STYLE['primary'])} bold"),
-            ("selected", f"fg:{_cname(_STYLE['primary'])}"),
+            ("qmark", f"fg:{_cname(_eff_style('tertiary'))}"),
+            ("question", f"fg:{_cname(_eff_style('tertiary'))}"),
+            ("answer", f"fg:{_cname(_eff_style('secondary'))} bold"),
+            ("pointer", f"fg:{_cname(_eff_style('primary'))} bold"),
+            ("highlighted", f"fg:{_cname(_eff_style('primary'))} bold"),
+            ("selected", f"fg:{_cname(_eff_style('primary'))}"),
             ("separator", f"fg:{_cname('grey62')}"),
-            ("instruction", f"fg:{_cname(_STYLE['tertiary'])}"),
+            ("instruction", f"fg:{_cname(_eff_style('tertiary'))}"),
             ("text", ""),
         ]
     )
@@ -1920,13 +2268,23 @@ def _interactive_config():
         print(msg)
 
 
+def _eff_style(slot):
+    """Effective rich style for a slot — custom_color override, else the theme."""
+    if CustomColor and _CUSTOM[slot]:
+        return _CUSTOM[slot]
+    return _STYLE[slot]
+
+
 def _cname(style):
     """Last color word of a style, as a prompt_toolkit-friendly hex or name."""
-    s = str(style)
+    s = _norm_style(style)
     if s.startswith("\x1b"):
         # ANSI escape code: map back to the chosen rich style string.
         resolved = None
         for which in ("primary", "secondary", "tertiary"):
+            if CustomColor and _CUSTOM[which] and s == _sgr(_CUSTOM[which]):
+                resolved = _CUSTOM[which]
+                break
             if s == _sgr(_STYLE[which]):
                 resolved = _STYLE[which]
                 break

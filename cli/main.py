@@ -34,6 +34,7 @@ P = config.Primary
 S = config.Secondary
 M = config.Muted
 R = config.Reset
+config.keep_live(globals())
 
 SHELL_AUTO_BG = {"radio", "savan"}
 
@@ -203,39 +204,73 @@ def _full_view():
         from backend import library
 
         data = _status._read()
-        playing = bool(data.get("playing")) and _status._fresh(data)
+        fresh = _status._fresh(data)
+        playing = bool(data.get("playing")) and fresh
+        paused = fresh and not playing
         title = data.get("title") or "—"
         dur = int(data.get("duration", 0))
         elapsed = int(data.get("elapsed", 0))
         mins, secs = divmod(dur, 60)
         dur_str = f"{mins}:{secs:02d}"
-        status_col = config.CYAN if playing else config.Muted
-        status_val = "playing" if playing else "not playing"
         width = _tty_width()
         inner = width - 2
 
-        vid = _status._vid_from_thumb(data.get("thumbnail", ""))
+        thumb = data.get("thumbnail", "")
+        vid = _status._vid_from_thumb(thumb)
         artist = album = ""
+        entry = {}
         if vid:
             entry = library.get(vid) or {}
             artist = entry.get("artist") or ""
             album = entry.get("album") or ""
 
+        def _vis_len(text):
+            return len(re.sub(r"\x1b\[[0-9;]*m", "", text))
+
+        def _fit(text, limit):
+            if _vis_len(text) <= limit:
+                return text
+            return re.sub(r"\x1b\[[0-9;]*m", "", text)[: max(1, limit - 1)] + "…"
+
         def _row(label, value):
+            value = _fit(value, max(8, inner - 22))
             text = f"  {label:<16}{value}"
-            plain = len(re.sub(r"\x1b\[[0-9;]*m", "", text))
-            return f"{P}│{R} {text}{' ' * max(0, inner - 1 - plain)}{P}│{R}"
+            return f"{P}│{R} {text}{' ' * max(0, inner - 1 - _vis_len(text))}{P}│{R}"
+
+        if playing:
+            status_val = f"{config.CYAN}▶ playing{R}"
+        elif paused:
+            status_val = f"{config.YELLOW}⏸ paused{R}"
+        else:
+            status_val = f"{M}⏹ not playing{R}"
 
         rows = [
-            ("status", f"{status_col}{status_val}{R}"),
+            ("status", status_val),
             ("title", f"{config.WHITE}{title}{R}"),
         ]
         if artist:
             rows.append(("artist", f"{config.WHITE}{artist}{R}"))
         if album:
             rows.append(("album", f"{config.WHITE}{album}{R}"))
+        if thumb.startswith(("http://", "https://")):
+            rows.append(("mode", f"{P}Online{R}"))
+        elif thumb and (".cache/" in thumb or thumb.startswith(str(Path.home()))):
+            rows.append(("mode", f"{S}Offline{R}"))
+        if entry:
+            bits = []
+            if entry.get("liked"):
+                bits.append(f"{config.RED}♥ liked{R}")
+            else:
+                bits.append(f"{M}♡{R}")
+            count = entry.get("song_count") or 0
+            if count:
+                bits.append(f"{config.CYAN}{count}{R} plays")
+            if library.get_download_path(vid):
+                bits.append(f"{M}saved locally{R}")
+            if bits:
+                rows.append(("library", "  ·  ".join(bits)))
         rows.append(("duration", f"{config.WHITE}{dur_str}{R}"))
-        if playing:
+        if fresh:
             now = f"{elapsed // 60}:{elapsed % 60:02d}"
             frac = min(elapsed / dur, 1.0) if dur else 0.0
             bar_w = min(config.BarWidth, max(4, inner - 40))
@@ -244,6 +279,9 @@ def _full_view():
                 f"{config.GREY}{now} / {dur_str}  {int(frac * 100):>3}%{R}"
             )
             rows.append(("progress", prog))
+            nxt = (data.get("next_title") or "").strip()
+            if nxt:
+                rows.append(("up next", f"{config.WHITE}» {nxt}{R}"))
 
         out = [f"\n{P}┌─ Now Playing {'─' * max(0, inner - 13 - 3)}┐{R}"]
         for label, value in rows:
@@ -260,6 +298,7 @@ def _full_view():
     tui_shell.clear_screen()
     try:
         while True:
+            config.maybe_reload()
             sys.stdout.write("\x1b[H")
             show_banner()
             print(_frame())
@@ -305,6 +344,7 @@ def _full_view_rich():
     last = None
     try:
         while True:
+            config.maybe_reload()
             data = _status._read()
             playing = bool(data.get("playing")) and _status._fresh(data)
             title = data.get("title") or "—"
@@ -689,6 +729,8 @@ def main():
         "summary",
         "export",
         "exit",
+        "scrobbler",
+        "scr",
     ):
         unknown = [args.command] + unknown
         args.command = "play"
@@ -752,6 +794,7 @@ def main():
         restore_quit_key = tui_shell.install_quit_key()
         try:
             while True:
+                config.maybe_reload()
                 try:
                     raw_input = tui_input().strip()
                     try:

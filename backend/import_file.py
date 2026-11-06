@@ -52,6 +52,7 @@ S = config.Secondary
 T = config.Tertiary
 E = config.RED
 R = config.Reset
+config.keep_live(globals())
 
 
 def _blank_row():
