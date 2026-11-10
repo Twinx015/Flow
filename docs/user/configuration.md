@@ -58,8 +58,8 @@ flow config api http://127.0.0.1:8000   # empty disables
   `playlist` (the name when playing from a playlist, otherwise `""`),
   `mode` (`online`/`offline`), and `at` (unix time).
 - **`POST /summary`** — everything `flow --summary` shows: play totals
-  (combined/online/offline/unique/today/downloaded/liked), the top artist,
-  language and song, the per-day 7-day split, this/last week counts, and
+  (combined/online/offline/unique/today/downloaded/liked), the top artist
+  and song, the per-day 7-day split, this/last week counts, and
   the full per-song table.
 
 Settings persist to `~/.flow/config.json`:

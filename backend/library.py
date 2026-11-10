@@ -2,7 +2,6 @@ import datetime
 import hashlib
 import json
 import pathlib
-import re
 import sqlite3
 import time
 import urllib.request
@@ -111,6 +110,7 @@ def _ensure_schema(conn):
     if "language" not in cols:
         conn.execute("ALTER TABLE songs ADD COLUMN language TEXT")
     _migrate_from_json(conn)
+    _purge_auto_tags(conn)
 
 
 @contextmanager
@@ -147,6 +147,14 @@ def _meta_set(conn, key, value):
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, str(value)),
     )
+
+
+def _purge_auto_tags(conn):
+    """One-time wipe of the old language/artist auto tags; user tags survive."""
+    if _meta_get(conn, "auto_tags_purged") == "1":
+        return
+    conn.execute("UPDATE songs SET language = NULL, artist = NULL")
+    _meta_set(conn, "auto_tags_purged", "1")
 
 
 def _migrate_from_json(conn):
@@ -403,49 +411,27 @@ def _by_name(rows) -> list:
     return sorted(rows, key=lambda r: (r["title"] or r["video_id"] or "").lower())
 
 
-def get_tag_rows(field: str, tag: str) -> list:
-    """Downloaded rows whose `language`/`artist` tag fuzzy-matches `tag`, by name."""
-    field = "artist" if field == "artist" else "language"
-    needle = (tag or "").strip().lower()
+def songs_with_tag(tag: str) -> list:
+    """Downloaded songs carrying one user tag, ascending by name."""
+    tag = (tag or "").strip()
+    if not tag:
+        return []
     with _session() as conn:
         rows = conn.execute(
-            "SELECT video_id, title, custom_title, artist, album, language, song "
-            "FROM songs WHERE downloaded = 1 AND song IS NOT NULL AND song != ''"
+            "SELECT s.video_id, s.title, s.custom_title, s.song "
+            "FROM song_tags t JOIN songs s ON s.video_id = t.video_id "
+            "WHERE t.tag = ? COLLATE NOCASE "
+            "AND s.downloaded = 1 AND s.song IS NOT NULL AND s.song != ''",
+            (tag,),
         ).fetchall()
-    matches = [r for r in rows if needle and needle in (r[field] or "").lower()]
     return [
         {
             "video_id": r["video_id"],
             "title": r["custom_title"] or r["title"] or r["video_id"],
-            "artist": r["artist"] or "",
-            "album": r["album"] or "",
-            "language": r["language"] or "",
             "song": r["song"],
         }
-        for r in _by_name(matches)
+        for r in _by_name(rows)
     ]
-
-
-def get_tag_counts() -> list:
-    """`[("hindi", 42), ("punjabi", 7)]` over downloaded songs, most common first."""
-    with _session() as conn:
-        rows = conn.execute(
-            "SELECT language, artist FROM songs "
-            "WHERE downloaded = 1 AND song IS NOT NULL AND song != ''"
-        ).fetchall()
-    languages = {}
-    artists = {}
-    for r in rows:
-        for key, counts in (("language", languages), ("artist", artists)):
-            word = (r[key] or "").strip().lower()
-            if not word:
-                continue
-            for part in re.split(r",\s*", word):
-                if part:
-                    counts[part] = counts.get(part, 0) + 1
-    langs = sorted(languages.items(), key=lambda kv: (-kv[1], kv[0]))
-    names = sorted(artists.items(), key=lambda kv: (-kv[1], kv[0]))
-    return langs, names
 
 
 def downloaded_rows() -> list:
@@ -548,90 +534,6 @@ def delete_tag(tag: str) -> int:
     with _write() as conn:
         cur = conn.execute("DELETE FROM song_tags WHERE tag = ?", (tag,))
         return cur.rowcount
-
-
-def _tag_field(field: str) -> str:
-    """Map a user field name to the songs column it edits."""
-    return "artist" if (field or "").strip().lower() in ("artist", "ar") else "language"
-
-
-def _field_parts(value) -> list:
-    return [part.strip() for part in (value or "").split(",") if part.strip()]
-
-
-def rename_field_tag(field: str, old: str, new: str) -> int:
-    """Rename one value inside the comma-separated `language`/`artist` column."""
-    field = _tag_field(field)
-    old, new = (old or "").strip(), (new or "").strip()
-    if not old or not new or old.lower() == new.lower():
-        return 0
-    with _write() as conn:
-        rows = conn.execute(
-            f"SELECT video_id, {field} AS value FROM songs"
-            f" WHERE {field} IS NOT NULL"
-        ).fetchall()
-        changed = 0
-        for r in rows:
-            parts = _field_parts(r["value"])
-            if old.lower() not in (p.lower() for p in parts):
-                continue
-            kept, seen = [], set()
-            for part in parts:
-                if part.lower() == old.lower():
-                    if new.lower() not in seen:
-                        kept.append(new)
-                        seen.add(new.lower())
-                elif part.lower() not in seen:
-                    kept.append(part)
-                    seen.add(part.lower())
-            conn.execute(
-                f"UPDATE songs SET {field} = ? WHERE video_id = ?",
-                (", ".join(kept), r["video_id"]),
-            )
-            changed += 1
-        return changed
-
-
-def delete_field_tag(field: str, value: str) -> int:
-    """Drop one value out of the comma-separated `language`/`artist` column."""
-    field = _tag_field(field)
-    value = (value or "").strip()
-    if not value:
-        return 0
-    with _write() as conn:
-        rows = conn.execute(
-            f"SELECT video_id, {field} AS value FROM songs"
-            f" WHERE {field} IS NOT NULL"
-        ).fetchall()
-        changed = 0
-        for r in rows:
-            parts = _field_parts(r["value"])
-            if value.lower() not in (p.lower() for p in parts):
-                continue
-            kept = [p for p in parts if p.lower() != value.lower()]
-            conn.execute(
-                f"UPDATE songs SET {field} = ? WHERE video_id = ?",
-                (", ".join(kept) if kept else None, r["video_id"]),
-            )
-            changed += 1
-        return changed
-
-
-def set_song_field(video_id: str, field: str, value: str) -> bool:
-    """Set a song's whole `language`/`artist` value; an empty string clears it."""
-    field = _tag_field(field)
-    value = (value or "").strip()
-    with _write() as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM songs WHERE video_id = ?", (video_id,)
-        ).fetchone()
-        if exists is None:
-            return False
-        conn.execute(
-            f"UPDATE songs SET {field} = ? WHERE video_id = ?",
-            (value or None, video_id),
-        )
-        return True
 
 
 def _default_entry(video_id: str, title: str = "") -> dict:
@@ -832,14 +734,7 @@ def track_download(video_id: str, path: str, title: str = "", meta=None):
 
 def meta_from_info(info: dict) -> dict:
     """Trim a track's YouTube metadata down to the fields the library stores."""
-    from .tags import tags_from_info
-
     meta = {}
-    tags = tags_from_info(info)
-    if tags.get("artist"):
-        meta["artist"] = tags["artist"]
-    if tags.get("language"):
-        meta["language"] = tags["language"]
     if info.get("album"):
         meta["album"] = info.get("album")
     duration = info.get("duration")

@@ -1,8 +1,10 @@
 import logging
 import pathlib
+import re
 import sys
 import threading
 import time
+import urllib.parse
 
 import yt_dlp
 
@@ -111,8 +113,57 @@ def _music_entry(item):
     }
 
 
+_VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_VIDEO_HOSTS = {
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+}
+
+
+def video_id_from_url(text):
+    """The YouTube video id in a watch/short/embed/share link, or None."""
+    raw = (text or "").strip()
+    if not raw or " " in raw:
+        return None
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in _VIDEO_HOSTS:
+        return None
+    path = parsed.path or ""
+    if host == "youtu.be":
+        parts = path.strip("/").split("/")
+        video_id = parts[0] if parts else ""
+    elif path == "/watch":
+        video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+    elif path.startswith(("/shorts/", "/embed/", "/live/")):
+        parts = path.strip("/").split("/")
+        video_id = parts[1] if len(parts) > 1 else ""
+    else:
+        return None
+    return video_id if _VIDEO_ID.match(video_id) else None
+
+
 def search(query, limit=3):
     """Search via `config.SearchSource`; returns (entry, title, duration) tuples."""
+    video_id = video_id_from_url(query)
+    if video_id:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        entry = get_entry(url)
+        if not entry:
+            return []
+        title = entry.get("title") or "Unknown"
+        duration = int(entry.get("duration") or 0)
+        return [(entry, title, duration)]
     key = f"{config.SearchSource}:{query}:{limit}"
     if key in _search_cache:
         return _search_cache[key]

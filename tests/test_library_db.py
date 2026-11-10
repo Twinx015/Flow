@@ -51,6 +51,11 @@ def clean_library():
 
     if added:
         library._mutate(drop)
+        with library._write() as conn:
+            conn.executemany(
+                "DELETE FROM song_tags WHERE video_id = ?",
+                [(video_id,) for video_id in added],
+            )
 
 
 @pytest.fixture
@@ -200,64 +205,53 @@ def test_web_rename_route_stores_the_name(song):
         )
 
 
-def test_tag_rows_filter_and_sort_by_name(tmp_path):
-    """Filtering and ordering are checked against this test's own rows only:
-    the scratch `library.db` is shared with every other test module."""
+def test_songs_with_tag_filters_downloaded_and_sorts_by_name(tmp_path):
+    """Only this test's rows matter: the scratch `library.db` is shared."""
     mine = {}
-    for idx, (name, language, artist) in enumerate(
-        (
-            ("Zed Track", "punjabi", "Testartist Zed"),
-            ("Alpha Track", "hindi", "Testartist Alpha"),
-            ("Mid Track", "punjabi", "Testartist Zed, Second"),
-        )
-    ):
+    for idx, name in enumerate(("Zed Track", "Alpha Track", "Mid Track")):
         video_id = f"tagvid{idx}"
         path = tmp_path / f"{video_id}.opus"
         path.write_bytes(b"")
         mine[video_id] = name
-        library.track_download(
-            video_id, str(path), name, {"language": language, "artist": artist}
-        )
+        library.track_download(video_id, str(path), name)
 
-    def titles(field, tag):
-        return [
-            r["title"]
-            for r in library.get_tag_rows(field, tag)
-            if r["video_id"] in mine
-        ]
+    library.set_song_tag("tagvid0", "RoadTrip", True)
+    library.set_song_tag("tagvid2", "roadtrip", True)
+    library.set_song_tag("tagvid1", "gym", True)
 
-    assert titles("language", "punjabi") == ["Mid Track", "Zed Track"]
-    assert titles("language", "pun") == ["Mid Track", "Zed Track"]
-    assert titles("language", "hindi") == ["Alpha Track"]
-    assert titles("artist", "testartist zed") == ["Mid Track", "Zed Track"]
-    assert library.get_tag_rows("language", "") == []
-    assert library.get_tag_rows("artist", "no-such-artist") == []
+    rows = [r for r in library.songs_with_tag("roadtrip") if r["video_id"] in mine]
+    assert [r["title"] for r in rows] == ["Mid Track", "Zed Track"]
+    assert library.songs_with_tag("") == []
+    assert library.songs_with_tag("no-such-tag") == []
 
 
-def test_tag_counts_split_collaborators():
-    for idx, (language, artist) in enumerate(
-        (
-            ("testlang", "Countartist One"),
-            ("testlang", "Countartist One"),
-            ("otherlang", "Countartist Two"),
-        )
-    ):
-        video_id = f"cntvid{idx}"
-        library.track_download(video_id, f"/tmp/{video_id}.opus", f"Track {idx}")
-        library.update_meta(video_id, {"language": language, "artist": artist})
-
-    langs = dict(library.get_tag_counts()[0])
-    artists = dict(library.get_tag_counts()[1])
-    assert langs["testlang"] == 2
-    assert artists["countartist one"] == 2
-    assert artists["countartist two"] == 1
+def test_songs_with_tag_ignores_undownloaded_songs(song):
+    """A liked or searched track that was never downloaded cannot leak in."""
+    library.update_meta(song, {"title": "Never Downloaded"})
+    library.set_song_tag(song, "ghost-tag", True)
+    assert library.songs_with_tag("ghost-tag") == []
 
 
-def test_only_downloaded_songs_are_tagged():
-    """A liked or searched track that was never downloaded has no tag rows."""
-    library.update_meta("undl", {"language": "hindi", "artist": "Nobody"})
-    assert library.get_tag_rows("language", "hindi") == []
-    assert library.get_tag_rows("artist", "Nobody") == []
+def test_purge_auto_tags_wipes_language_and_artist_once(song):
+    library.track_download(song, "/tmp/nope.opus", "Old Auto Track")
+    library.update_meta(song, {"language": "hindi", "artist": "Auto Artist"})
+    library.set_song_tag(song, "kept", True)
+    with library._write() as conn:
+        library._meta_set(conn, "auto_tags_purged", "0")
+        library._purge_auto_tags(conn)
+        assert library._meta_get(conn, "auto_tags_purged") == "1"
+
+    entry = library.get(song)
+    assert entry["language"] is None
+    assert entry["artist"] is None
+    assert library.song_tags(song) == ["kept"]
+
+
+def test_meta_from_info_no_longer_writes_language_or_artist():
+    meta = library.meta_from_info(
+        {"language": "punjabi", "artist": "Karan Aujla", "album": "Album", "duration": "180"}
+    )
+    assert meta == {"album": "Album", "duration": 180}
 
 
 # ---------------------------------------------------------------------------

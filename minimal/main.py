@@ -19,9 +19,9 @@ examples:
   flow-min --json search "arijit singh" | jq '.[0].video_id'
   flow-min search "arijit singh"      list the results as 1..N
   flow-min play 2                     play row 2 of that search
-  flow-min lang hindi -s              play every downloaded hindi song, shuffled
+  flow-min tags play workout -s       play every downloaded "workout" song, shuffled
   flow-min next                       skip, from anywhere
-  flow-min artist karan --json        list karan aujla songs as JSON
+  flow-min tags list --json           list tags as JSON
 """
 
 
@@ -56,13 +56,13 @@ def build_parser():
         return sub
 
     add("status", "what is playing right now").set_defaults(func=lambda a: core.status_cmd())
-    playback_flags(add("play", "search YouTube and play; a bare number plays that row of the last search")).set_defaults(func=lambda a: core.play(" ".join(a.query), index=a.index, shuffle=a.shuffle, foreground=a.fg))
+    playback_flags(add("play", "search YouTube or play a link; a bare number plays that row of the last search")).set_defaults(func=lambda a: core.play(" ".join(a.query), index=a.index, shuffle=a.shuffle, foreground=a.fg))
     playback_flags(add("play-off", "play a downloaded song"), index=False).set_defaults(func=lambda a: core.play_off(" ".join(a.query), shuffle=a.shuffle, foreground=a.fg))
     resume = add("resume", "play the current or last track again")
     resume.add_argument("--fg", action="store_true", help="stay in the foreground instead of detaching")
     resume.set_defaults(func=lambda a: core.resume(foreground=a.fg))
 
-    search = add("search", "search YouTube without playing")
+    search = add("search", "search YouTube or resolve a link without playing")
     search.add_argument("query", nargs="*")
     search.add_argument("--limit", type=int, help="how many results")
     search.set_defaults(func=lambda a: core.search(" ".join(a.query), limit=a.limit))
@@ -86,7 +86,7 @@ def build_parser():
     add("like", "like the current track").set_defaults(func=lambda a: local.like())
     add("unlike", "unlike the current track").set_defaults(func=lambda a: local.unlike())
 
-    download = add("download", "download a search result", aliases=["dl"])
+    download = add("download", "download a search result or direct link", aliases=["dl"])
     download.add_argument("query", nargs="*")
     download.add_argument("-i", "--index", type=int, default=1, help="which search result (default 1)")
     download.add_argument("-f", "--format", help="opus, m4a, mp3 or webm")
@@ -102,16 +102,6 @@ def build_parser():
     rename.set_defaults(func=lambda a: local.rename(" ".join(a.query), " ".join(a.new_name)))
 
     for name, help_text, func in (
-        ("lang", "play every downloaded song with a language tag", local.lang),
-        ("artist", "play every downloaded song with an artist tag", local.artist),
-    ):
-        tagged = add(name, help_text)
-        tagged.add_argument("tag", nargs="*", help="one word, or several if the tag has spaces")
-        tagged.add_argument("-s", "--shuffle", action="store_true", help="shuffle the queue")
-        tagged.add_argument("--limit", type=int, help="play at most this many")
-        tagged.set_defaults(func=(lambda a, f=func: f(" ".join(a.tag), shuffle=a.shuffle, limit=a.limit)))
-
-    for name, help_text, func in (
         ("radio", "stream a radio mix from a song or artist", extras.radio),
         ("radio-off", "shuffle the downloaded library", extras.radio_off),
     ):
@@ -120,19 +110,38 @@ def build_parser():
         radio.add_argument("--limit", type=int)
         radio.set_defaults(func=(lambda a, f=func: f(" ".join(a.seed) or None, limit=a.limit)))
 
-    tags = add("tags", "show tags, or maintain them: add/remove/rename/delete")
+    tags = add("tags", "show, play, export or maintain user tags")
     tags.add_argument(
         "action",
         nargs="?",
-        choices=["list", "add", "remove", "rename", "delete"],
+        choices=["list", "add", "remove", "rename", "delete", "play", "random", "export"],
         default="list",
     )
     tags.add_argument(
         "args",
         nargs="*",
-        help="add/remove: <song> <tag>   rename: <tag> <new>   delete: <tag>",
+        help="add/remove: <song> <tag>   play/random/export: <tag>   rename: <tag> <new>   delete: <tag>",
     )
-    tags.set_defaults(func=lambda a: extras.tags(a.action, list(a.args)))
+    tags.add_argument("-s", "--shuffle", action="store_true", help="shuffle a tag queue")
+    tags.add_argument(
+        "-r",
+        "--repeat",
+        nargs="?",
+        const=0,
+        type=int,
+        help="repeat a tag queue (N times; empty or 0 = forever)",
+    )
+    tags.add_argument("-p", "--path", help="export destination folder")
+    tags.set_defaults(
+        func=lambda a: extras.tags(
+            a.action,
+            list(a.args),
+            shuffle=a.shuffle,
+            repeat=a.repeat is not None,
+            repeat_count=a.repeat or 0,
+            path=a.path,
+        )
+    )
 
     add("lyrics", "plain lyrics for the current track").set_defaults(func=lambda a: extras.lyrics())
 

@@ -172,18 +172,6 @@ def test_stats_card_lists_the_top_song(capsys):
     assert "Around the World (4 plays)" in out
 
 
-def test_stats_card_ranks_languages_by_plays(capsys):
-    library.update_meta("sum-test-1", {"language": "english"})
-    out = run(capsys, [])
-    # 4 plays on the only tagged song; the two untagged songs are skipped.
-    assert re.search(r"top language\s+english \(4 plays\)", out)
-
-
-def test_stats_card_shows_a_dash_without_any_language_tag(capsys):
-    out = run(capsys, [])
-    assert re.search(r"top language[ \t]+-[ \t]*│", out, re.M)
-
-
 def test_chart_stacks_online_and_offline_for_today(capsys):
     online = history.totals()["online_today"]
     offline = max(dict(library.play_days(7))[0] - online, 0)

@@ -25,6 +25,7 @@ through `config._truncate_title`.
 
 import json
 import os
+import pathlib
 import signal
 import sys
 import threading
@@ -83,6 +84,7 @@ def clean_state():
     yield
     for video_id in set(library.load()) - before:
         library._mutate(lambda data, v=video_id: data.pop(v, None) or True)
+        library.clear_song_tags(video_id)
     registry.clear()
     status.STATUS_FILE.unlink(missing_ok=True)
     core.SEARCH_FILE.unlink(missing_ok=True)
@@ -384,13 +386,63 @@ def test_delete_refuses_an_ambiguous_name(capfd):
     assert kept.exists()
 
 
-def test_tags_lists_languages_and_artists(capfd):
-    _downloaded(IDS["tags"], "Tagged Anthem", {"artist": "Tag Artist", "language": "punjabi"})
+def test_tags_lists_user_tags(capfd):
+    _downloaded(IDS["tags"], "Tagged Anthem")
+    library.set_song_tag(IDS["tags"], "workout", True)
     start(as_json=True)
     extras.tags()
     rows = json.loads(read(capfd)[0])
-    assert {"kind": "language", "tag": "punjabi", "count": 1} in rows
-    assert {"kind": "artist", "tag": "tag artist", "count": 1} in rows
+    assert {"kind": "tag", "tag": "workout", "count": 1} in rows
+    assert all(row["kind"] == "tag" for row in rows)
+
+
+def test_tags_play_loads_every_tagged_song(monkeypatch):
+    first = _downloaded(IDS["tags"], "Tagged Anthem")
+    second = _downloaded(IDS["list_other"], "Second Tagged")
+    library.set_song_tag(IDS["tags"], "workout", True)
+    library.set_song_tag(IDS["list_other"], "workout", True)
+    seen = {}
+    monkeypatch.setattr(
+        core, "play_paths", lambda paths, **kw: seen.update(paths=paths, **kw)
+    )
+    start()
+    extras.tags("play", ["workout"], shuffle=True, repeat=True)
+    assert {pathlib.Path(p).stem for p in seen["paths"]} == {first.stem, second.stem}
+    assert seen["shuffle"] is True
+    assert seen["repeat"] is True
+
+
+def test_tags_random_plays_one_tagged_song(monkeypatch):
+    _downloaded(IDS["tags"], "Tagged Anthem")
+    library.set_song_tag(IDS["tags"], "workout", True)
+    seen = {}
+    monkeypatch.setattr(
+        core, "play_paths", lambda paths, **kw: seen.update(paths=paths, **kw)
+    )
+    start()
+    extras.tags("random", ["workout"])
+    assert [pathlib.Path(p).stem for p in seen["paths"]] == [IDS["tags"]]
+    assert seen["shuffle"] is False
+    assert seen["repeat"] is False
+
+
+def test_tags_export_only_copies_that_tags_songs(capfd, monkeypatch, tmp_path):
+    _downloaded(IDS["tags"], "Tagged Anthem")
+    library.set_song_tag(IDS["tags"], "workout", True)
+    seen = {}
+    monkeypatch.setattr(
+        config,
+        "export_flow",
+        lambda dest, stems: seen.update(dest=dest, stems=stems) or (1, 0, dest),
+    )
+    start(as_json=True)
+    dest = tmp_path / "out"
+    extras.tags("export", ["workout", "-p", str(dest)])
+    payload = json.loads(read(capfd)[0])
+    assert seen["dest"] == str(dest)
+    assert seen["stems"] == {IDS["tags"]}
+    assert payload["status"] == "exported"
+    assert payload["songs"] == 1
 
 
 def test_history_and_stats_read_the_log(capfd):
@@ -439,8 +491,6 @@ def test_parser_covers_every_command():
         ["dl", "anthem"],
         ["delete", "some", "anthem"],
         ["rename", "some", "anthem", "--to", "New", "Name"],
-        ["lang", "hindi", "-s"],
-        ["artist", "karan", "aujla", "--limit", "3"],
         ["radio", "karan", "aujla"],
         ["radio", "--limit", "10"],
         ["radio-off", "--limit", "5"],
@@ -450,6 +500,10 @@ def test_parser_covers_every_command():
         ["tags", "remove", "some", "anthem", "workout"],
         ["tags", "rename", "workout", "gym"],
         ["tags", "delete", "workout"],
+        ["tags", "play", "workout", "-s"],
+        ["tags", "play", "workout", "-r"],
+        ["tags", "random", "workout"],
+        ["tags", "export", "workout", "-p", "/tmp/out"],
         ["lyrics"],
         ["playlist", "chill"],
         ["pl", "chill", "create"],
@@ -472,8 +526,6 @@ def test_parser_keeps_multi_word_arguments_whole():
     assert parser.parse_args(["play", "karan", "aujla"]).query == ["karan", "aujla"]
     assert parser.parse_args(["play-off", "52", "bars"]).query == ["52", "bars"]
     assert parser.parse_args(["search", "arijit", "singh"]).query == ["arijit", "singh"]
-    assert parser.parse_args(["artist", "karan", "aujla"]).tag == ["karan", "aujla"]
-    assert parser.parse_args(["lang", "punjabi"]).tag == ["punjabi"]
     assert parser.parse_args(["delete", "some", "anthem"]).query == ["some", "anthem"]
     assert parser.parse_args(["rename", "old", "anthem", "--to", "New", "Name"]).new_name == ["New", "Name"]
     assert parser.parse_args(["rename", "old", "anthem", "--to", "New", "Name"]).query == ["old", "anthem"]

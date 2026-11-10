@@ -38,7 +38,6 @@ backend/               # all logic
   mpris.py             #   MPRIS D-Bus integration
   visualizer.py        #   audio-reactive spectrum bars (sounddevice/numpy)
   lyrics.py            #   synced lyrics (LRCLIB, YouTube Music fallback)
-  tags.py              #   one-word language + artist tags trimmed from metadata
   sponsor.py           #   SponsorBlock segment skip / cut
   plugins.py           #   plugin install/run/update
   daemon.py            #   resident RPC host (socket owner, plugin lifecycle)
@@ -68,7 +67,7 @@ minimal/               # `flow-min` entry point
   out.py               #   private stdout, fd-level silencing, exit codes, bg fork
   common.py            #   ns(), live_player(), signal(), clock, library_rows
   core.py              #   status, transport control, search, play/resume, queues
-  local.py             #   list/liked/like/download/delete/rename/lang/artist
+  local.py             #   list/liked/like/download/delete/rename
   extras.py            #   radio, tags, lyrics, playlists
   stats.py             #   history, stats
   __main__.py          #   python -m minimal

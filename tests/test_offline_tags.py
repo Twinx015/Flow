@@ -1,12 +1,10 @@
-"""Tests for tags: `lang`, `artist` playback and the `tags` editor/commands.
+"""Tests for user tags: playback, export and the interactive tag menu.
 
-A tag only works if the numbers add up: `lang punjabi` has to reach the
-punjabi songs and nothing else, `artist karan` has to reach the Karan Aujla
-songs, both ascending by name. `tags` adds, removes, renames and deletes
-free-form tags and the language/artist columns directly in `library.db`.
-
-Uses the scratch `HOME` from `conftest.py`; playback is faked so the
-assertions are about which songs were queued, not about VLC.
+Tags are now user-owned: a download never creates language or artist tags.
+`songs_with_tag` reads the `song_tags` table, `tags play` queues every song in
+a tag (`-s` shuffles, `-r` repeats), `tags random` plays one, and `tags export`
+copies only that tag's files. The interactive menu is exercised through its
+helpers so the real questionary prompts never run in tests.
 """
 
 import argparse
@@ -14,7 +12,7 @@ import pathlib
 
 import pytest
 
-from backend import library
+from backend import config, library, ui
 from backend.Offline import commands as offline
 
 
@@ -32,32 +30,26 @@ def fake_library(monkeypatch, tmp_path):
     with library._write() as conn:
         conn.execute("DELETE FROM song_tags")
     songs = {}
-    for idx, (name, language, artist) in enumerate(
-        (
-            ("Zed Track", "punjabi", "Karan Aujla"),
-            ("Alpha Track", "hindi", "Arijit Singh"),
-            ("Mid Track", "punjabi", "Karan Aujla, Ikky"),
-            ("Untuned", "", ""),
-        )
-    ):
+    for idx, name in enumerate(("Zed Track", "Alpha Track", "Mid Track", "Untuned")):
         video_id = f"tagplay{idx}"
         path = tmp_path / f"{video_id}.opus"
         path.write_bytes(b"")
-        library.track_download(
-            video_id, str(path), name, {"language": language, "artist": artist}
-        )
+        library.track_download(video_id, str(path), name)
         songs[name] = path
 
+    library.set_song_tag("tagplay0", "roadtrip", True)
+    library.set_song_tag("tagplay2", "roadtrip", True)
+    library.set_song_tag("tagplay1", "gym", True)
+
     played = []
+    args_seen = []
 
     def fake_play_queue(paths, args):
         played.extend(pathlib.Path(p) for p in paths)
+        args_seen.append(args)
 
     monkeypatch.setattr(offline, "_play_queue", fake_play_queue)
-    monkeypatch.setattr(
-        offline, "_play_liked", lambda args: played.append("liked")
-    )
-    yield played
+    yield played, args_seen
 
 
 def _names(played):
@@ -65,201 +57,159 @@ def _names(played):
     return [pathlib.Path(p).stem for p in played if "tagplay" in str(p)]
 
 
-def test_lang_plays_every_song_with_that_tag(fake_library):
-    offline.lang_track(["punjabi"], _args())
-    assert _names(fake_library) == ["tagplay2", "tagplay0"]
+def test_tags_play_plays_every_song_in_a_tag(fake_library):
+    played, _ = fake_library
+    offline.tags_cmd(["play", "roadtrip"], _args())
+    assert _names(played) == ["tagplay2", "tagplay0"]
 
 
-def test_lang_matches_a_partial_tag(fake_library):
-    offline.lang_track(["pun"], _args())
-    assert len(fake_library) == 2
+def test_tags_play_matches_case_insensitively(fake_library):
+    played, _ = fake_library
+    offline.tags_cmd(["play", "RoadTrip"], _args())
+    assert _names(played) == ["tagplay2", "tagplay0"]
 
 
-def test_lang_with_no_match_says_so(fake_library, capsys):
-    offline.lang_track(["telugu"], _args())
-    assert fake_library == []
-    assert "No downloaded songs tagged 'telugu'" in capsys.readouterr().out
+def test_tags_play_with_no_match_says_so(fake_library, capsys):
+    played, _ = fake_library
+    offline.tags_cmd(["play", "nope"], _args())
+    assert played == []
+    assert "No downloaded songs tagged 'nope'" in capsys.readouterr().out
 
 
-def test_a_bare_lang_lists_the_tags_instead(fake_library, capsys):
-    offline.lang_track([], _args())
-    out = capsys.readouterr().out
-    assert "Usage: lang" in out
-    assert "punjabi" in out
-    assert fake_library == []
-
-
-def test_artist_plays_every_song_by_that_artist(fake_library):
-    offline.artist_track(["karan"], _args())
-    assert _names(fake_library) == ["tagplay2", "tagplay0"]
-
-
-def test_artist_matches_a_full_name_too(fake_library):
-    offline.artist_track(["Arijit Singh"], _args())
-    assert _names(fake_library) == ["tagplay1"]
-
-
-def test_s_is_the_shuffle_flag(fake_library, monkeypatch):
+def test_s_shuffles_a_tag_queue(fake_library, monkeypatch):
+    played, _ = fake_library
     monkeypatch.setattr(offline.random, "shuffle", lambda items: items.reverse())
-    offline.lang_track(["punjabi"], _args(shuffle=True))
-    assert _names(fake_library) == ["tagplay0", "tagplay2"]
+    offline.run("tags", ["play", "roadtrip", "-s"], _args())
+    assert _names(played) == ["tagplay0", "tagplay2"]
 
 
-def test_untagged_songs_are_never_played_by_tag(fake_library):
-    offline.lang_track(["a"], _args())
-    offline.artist_track([""], _args())
-    assert "tagplay3" not in _names(fake_library)
+def test_r_repeats_a_tag_queue(fake_library):
+    _, args_seen = fake_library
+    offline.run("tags", ["play", "roadtrip", "-r", "3"], _args())
+    assert args_seen[-1].repeat is True
+    assert args_seen[-1].repeat_count == 3
 
 
-def test_the_alias_dispatches(fake_library):
-    offline.run("ar", ["Karan Aujla"], _args())
-    assert len(fake_library) == 2
+def test_tags_random_plays_one_song_from_the_tag(fake_library, monkeypatch):
+    played, _ = fake_library
+    monkeypatch.setattr(offline.random, "choice", lambda paths: paths[0])
+    offline.tags_cmd(["random", "roadtrip"], _args())
+    assert len(_names(played)) == 1
+    assert _names(played)[0] in {"tagplay0", "tagplay2"}
 
 
-def test_lang_is_not_an_online_command():
-    from backend.Online import commands as online
-
-    assert "lang" not in online.COMMANDS
-    assert "artist" in online.COMMANDS
-
-
-def test_tags_add_puts_a_free_form_tag_on_one_song(fake_library, capsys):
-    offline.tags_cmd(["add", "Zed", "roadtrip"], _args())
-    assert library.song_tags("tagplay0") == ["roadtrip"]
-    assert "Tagged" in capsys.readouterr().out
-
-
-def test_tags_add_matches_by_list_index_too(fake_library, monkeypatch):
+def test_tags_export_passes_only_that_tags_songs(fake_library, monkeypatch, tmp_path):
+    _, _ = fake_library
+    seen = {}
     monkeypatch.setattr(
-        offline.lib,
-        "get_songs",
-        lambda: [
-            pathlib.Path("/songs/tagplay2.opus"),
-            pathlib.Path("/songs/tagplay0.opus"),
-        ],
+        config,
+        "export_flow",
+        lambda dest, stems: seen.update(dest=dest, stems=stems) or (2, 0, dest),
     )
-    offline.tags_cmd(["add", "1", "workout"], _args())
-    assert library.song_tags("tagplay2") == ["workout"]
+    dest = tmp_path / "out"
+    offline.run("tags", ["export", "roadtrip", "-p", str(dest)], _args())
+    assert seen["dest"] == str(dest)
+    assert seen["stems"] == {"tagplay0", "tagplay2"}
 
 
-def test_tags_remove_takes_a_tag_off_a_song(fake_library):
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    offline.tags_cmd(["remove", "Zed", "roadtrip"], _args())
-    assert library.song_tags("tagplay0") == []
+def test_tags_add_and_remove_are_scriptable(fake_library):
+    offline.tags_cmd(["add", "Untuned", "workout"], _args())
+    assert library.song_tags("tagplay3") == ["workout"]
+    offline.tags_cmd(["remove", "Untuned", "workout"], _args())
+    assert library.song_tags("tagplay3") == []
 
 
-def test_edit_field_delete_picks_several_tags(fake_library, monkeypatch):
-    from backend import ui
+def test_tags_list_shows_only_user_tags(fake_library, capsys):
+    offline.tags_cmd(["list"], _args())
+    out = capsys.readouterr().out
+    assert "Tags:" in out
+    assert "roadtrip (2)" in out
+    assert "gym (1)" in out
+    assert "Languages:" not in out
+    assert "Artists:" not in out
 
+
+def test_interactive_add_picks_a_tag_then_songs(fake_library, monkeypatch, capsys):
+    monkeypatch.setattr(offline, "_pick_tag_or_new", lambda prompt, style: "workout")
     monkeypatch.setattr(
-        ui, "pick_many", lambda q, c, **kw: (["punjabi", "hindi"], True)
+        offline, "_pick_songs", lambda prompt, rows=None: ["tagplay3"]
     )
-    monkeypatch.setattr(offline, "_ask_confirm", lambda prompt, style: True)
-    offline._edit_field_delete("language", "Language", "style")
-    langs = dict(library.get_tag_counts()[0])
-    assert "punjabi" not in langs
-    assert "hindi" not in langs
+    offline._edit_custom_add("style")
+    assert library.song_tags("tagplay3") == ["workout"]
+    assert "Tagged 1 song(s)" in capsys.readouterr().out
 
 
-def test_edit_field_clear_picks_several_songs(fake_library, monkeypatch):
+def test_interactive_remove_picks_a_tag_then_songs(fake_library, monkeypatch):
+    monkeypatch.setattr(offline, "_pick_tag", lambda prompt: "roadtrip")
     monkeypatch.setattr(
-        offline, "_pick_songs", lambda prompt: ["tagplay0", "tagplay1"]
+        offline, "_pick_songs", lambda prompt, rows=None: ["tagplay0"]
     )
-    monkeypatch.setattr(offline, "_ask_confirm", lambda prompt, style: True)
-    offline._edit_field_clear("language", "Language", "style")
-    langs = dict(library.get_tag_counts()[0])
-    assert "hindi" not in langs
-    assert langs.get("punjabi") == 1
-
-
-def test_edit_custom_delete_picks_several_tags(fake_library, monkeypatch):
-    from backend import ui
-
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    library.set_song_tag("tagplay1", "gym", True)
-    library.set_song_tag("tagplay2", "roadtrip", True)
-    monkeypatch.setattr(
-        ui, "pick_many", lambda q, c, **kw: (["roadtrip", "gym"], True)
-    )
-    monkeypatch.setattr(offline, "_ask_confirm", lambda prompt, style: True)
-    offline._edit_custom_delete("style")
-    assert library.all_song_tags() == []
-
-
-def test_edit_custom_remove_picks_several_songs(fake_library, monkeypatch):
-    from backend import ui
-
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    library.set_song_tag("tagplay1", "roadtrip", True)
-    monkeypatch.setattr(
-        offline, "_pick_songs", lambda prompt: ["tagplay0", "tagplay1"]
-    )
-    monkeypatch.setattr(ui, "pick", lambda q, c, **kw: ("roadtrip", True))
     offline._edit_custom_remove("style")
     assert library.song_tags("tagplay0") == []
-    assert library.song_tags("tagplay1") == []
-    assert library.song_tags("tagplay2") == []
+    assert library.song_tags("tagplay2") == ["roadtrip"]
 
 
-def test_edit_custom_clear_picks_several_songs(fake_library, monkeypatch, capsys):
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    library.set_song_tag("tagplay1", "gym", True)
+def test_interactive_play_all_uses_the_chosen_flags(fake_library, monkeypatch):
+    played, args_seen = fake_library
+    monkeypatch.setattr(offline, "_pick_tag", lambda prompt: "roadtrip")
+    monkeypatch.setattr(ui, "pick", lambda q, c, **kw: ((True, False), True))
+    offline._edit_play_all(_args(), "style")
+    assert set(_names(played)) == {"tagplay0", "tagplay2"}
+    assert args_seen[-1].shuffle is True
+    assert args_seen[-1].repeat is False
+
+
+def test_interactive_play_one_can_pick_random(fake_library, monkeypatch):
+    played, _ = fake_library
+    monkeypatch.setattr(offline, "_pick_tag", lambda prompt: "roadtrip")
+    monkeypatch.setattr(ui, "pick", lambda q, c, **kw: ("random", True))
+    monkeypatch.setattr(offline.random, "choice", lambda paths: paths[0])
+    offline._edit_play_one(_args(), "style")
+    assert len(_names(played)) == 1
+    assert _names(played)[0] in {"tagplay0", "tagplay2"}
+
+
+def test_interactive_export_uses_the_tag_and_typed_folder(
+    fake_library, monkeypatch, tmp_path
+):
+    _, _ = fake_library
+    seen = {}
+    monkeypatch.setattr(offline, "_pick_tag", lambda prompt: "roadtrip")
+    monkeypatch.setattr(offline, "_ask_text", lambda prompt, style, default="": str(tmp_path / "out"))
     monkeypatch.setattr(
-        offline, "_pick_songs", lambda prompt: ["tagplay0", "tagplay1"]
+        config,
+        "export_flow",
+        lambda dest, stems: seen.update(dest=dest, stems=stems) or (2, 0, dest),
     )
-    monkeypatch.setattr(offline, "_ask_confirm", lambda prompt, style: True)
-    offline._edit_custom_clear("style")
-    assert library.song_tags("tagplay0") == []
-    assert library.song_tags("tagplay1") == []
-    assert "Cleared 2 tag(s) from 2 song(s)" in capsys.readouterr().out
+    offline._edit_export("style")
+    assert seen["dest"] == str(tmp_path / "out")
+    assert seen["stems"] == {"tagplay0", "tagplay2"}
 
 
 def test_tags_rename_renames_a_tag_everywhere(fake_library):
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    library.set_song_tag("tagplay1", "roadtrip", True)
     offline.tags_cmd(["rename", "roadtrip", "driving"], _args())
     assert library.song_tags("tagplay0") == ["driving"]
-    assert library.song_tags("tagplay1") == ["driving"]
-    assert library.all_song_tags() == [("driving", 2)]
+    assert library.song_tags("tagplay2") == ["driving"]
+    assert library.all_song_tags() == [("driving", 2), ("gym", 1)]
 
 
 def test_tags_delete_drops_a_tag_everywhere(fake_library):
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    library.set_song_tag("tagplay1", "roadtrip", True)
     offline.tags_cmd(["delete", "roadtrip"], _args())
-    assert library.all_song_tags() == []
-
-
-def test_tags_list_shows_languages_artists_and_free_form_tags(fake_library, capsys):
-    library.set_song_tag("tagplay0", "roadtrip", True)
-    offline.tags_cmd(["list"], _args())
-    out = capsys.readouterr().out
-    assert "Languages:" in out
-    assert "punjabi (2)" in out
-    assert "Artists:" in out
-    assert "Tags:" in out
-    assert "roadtrip (1)" in out
-
-
-def test_the_preview_file_flow_is_gone():
-    assert not hasattr(offline, "scan_tags")
-    assert not hasattr(offline, "apply_tags")
-    assert not hasattr(offline, "PREVIEW_FILE")
+    assert library.all_song_tags() == [("gym", 1)]
 
 
 def test_an_unknown_tags_action_lists_the_ones_that_work(capsys):
     offline.tags_cmd(["frobnicate"], _args())
     out = capsys.readouterr().out
     assert "tags add" in out
-    assert "tags delete" in out
+    assert "tags play" in out
+    assert "tags export" in out
 
 
 def test_song_tags_are_sorted_and_counted(fake_library):
-    library.set_song_tag("tagplay0", "roadtrip", True)
     library.set_song_tag("tagplay0", "gym", True)
-    library.set_song_tag("tagplay1", "roadtrip", True)
     assert library.song_tags("tagplay0") == ["gym", "roadtrip"]
-    assert library.all_song_tags() == [("roadtrip", 2), ("gym", 1)]
+    assert library.all_song_tags() == [("gym", 2), ("roadtrip", 2)]
 
 
 def test_rename_tag_merges_instead_of_duplicating(fake_library):
@@ -267,47 +217,14 @@ def test_rename_tag_merges_instead_of_duplicating(fake_library):
     library.set_song_tag("tagplay0", "workout", True)
     library.set_song_tag("tagplay1", "workout", True)
     assert library.rename_tag("workout", "gym") == 2
-    assert library.song_tags("tagplay0") == ["gym"]
-    assert library.all_song_tags() == [("gym", 2)]
+    assert library.song_tags("tagplay0") == ["gym", "roadtrip"]
+    assert ("gym", 2) in library.all_song_tags()
 
 
-def test_clearing_a_download_drops_its_free_form_tags(fake_library):
-    library.set_song_tag("tagplay0", "roadtrip", True)
+def test_clearing_a_download_drops_its_tags(fake_library):
     library.clear_download("tagplay0")
     assert library.song_tags("tagplay0") == []
-    assert library.all_song_tags() == []
-
-
-def test_set_song_field_sets_and_clears(fake_library):
-    assert library.set_song_field("tagplay0", "language", "telugu")
-    assert library.get("tagplay0")["language"] == "telugu"
-    assert library.set_song_field("tagplay0", "language", "")
-    assert library.get("tagplay0")["language"] is None
 
 
 def test_tag_mutation_refuses_unknown_songs():
     assert not library.set_song_tag("ghost", "roadtrip", True)
-    assert not library.set_song_field("ghost", "language", "hindi")
-
-
-def test_rename_field_tag_is_comma_aware(fake_library):
-    changed = library.rename_field_tag("artist", "Ikky", "Ikky Singh")
-    assert changed == 1
-    assert library.get("tagplay2")["artist"] == "Karan Aujla, Ikky Singh"
-
-
-def test_delete_field_tag_keeps_the_other_parts(fake_library):
-    changed = library.delete_field_tag("artist", "Ikky")
-    assert changed == 1
-    assert library.get("tagplay2")["artist"] == "Karan Aujla"
-
-
-def test_delete_field_tag_clears_a_sole_value_to_none(fake_library):
-    changed = library.delete_field_tag("language", "hindi")
-    assert changed == 1
-    assert library.get("tagplay1")["language"] is None
-
-
-def test_field_tag_matching_is_case_insensitive(fake_library):
-    assert library.rename_field_tag("artist", "ikky", "Ikky S.") == 1
-    assert library.get("tagplay2")["artist"] == "Karan Aujla, Ikky S."

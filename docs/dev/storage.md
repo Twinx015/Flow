@@ -107,29 +107,19 @@ Notes:
   (CLI, TUI, web, lyrics search) shows it without knowing the column exists.
   Fresh downloads and metadata rebuilds only write `title`, so a rename is
   never overwritten. The column is added by `_ensure_schema` on first open.
-- `language` and `artist` are the two **tags** a download stores, trimmed out of
-  the video's YouTube metadata by `backend/tags.py`. `tags_from_info(info)`
-  is the only caller (`library.meta_from_info`), so every download path — CLI,
-  TUI, web — tags the same way. `language` is one lowercase word: YouTube's
-  language field if it has one, else the script the title/description is written
-  in, else `english` for plain Latin text. `artist` prefers yt-dlp's field, then
-  a `Singer:`-style credit in the description, then `Tile.parse_title` on the
-  raw title; the channel name is deliberately not used. Both columns are added by
-  `_ensure_schema` on first open.
-- `library.get_tag_rows(field, tag)` is the read side: downloaded rows only,
-  fuzzy (case-insensitive substring) on `language` or `artist`, ascending by
-  display name. `library.get_tag_counts()` returns both tag lists with counts.
-  The writers are `Offline.lang_track` / `Offline.artist_track` (readers too),
-  the `tags` editor in `Offline.commands`, and the `tags add|remove|rename|delete`
-  forms of both the offline shell and `flow-min`.
-- `song_tags` is a second table of **free-form** tags the user assigns by hand:
-  one `(video_id, tag)` row per tag. `library.set_song_tag` adds or removes
-  one, `rename_tag` / `delete_tag` act on a whole tag across songs,
-  `clear_song_tags` empties a song, and `downloaded_rows` joins them for the
-  editor's pickers. `library.clear_download` drops them with the download.
-  `library.rename_field_tag` / `delete_field_tag` / `set_song_field` edit the
-  `language`/`artist` columns whole-value, splitting on commas so a
-  `"hindi, punjabi"` value counts as (and renames/deletes) either tag.
+- `language` and `artist` are kept for schema compatibility but are **not**
+  tags any more: nothing writes them at download time (`library.meta_from_info`
+  only keeps album and duration) and `_purge_auto_tags` clears any values left
+  by an older version once, guarded by the `auto_tags_purged` meta key.
+- `song_tags` is a table of **user-owned** tags: one `(video_id, tag)` row per
+  tag. `library.set_song_tag` adds or removes one, `rename_tag` / `delete_tag`
+  act on a whole tag across songs, `clear_song_tags` empties a song, and
+  `downloaded_rows` joins them for the editor's pickers. `library.clear_download`
+  drops them with the download.
+- `library.songs_with_tag(tag)` is the read side for playback and export:
+  downloaded rows only, exact case-insensitive tag match, ascending by display
+  name. `Offline.tags_play` / `tags_random` / `tags_export` use it, as do the
+  interactive tag menu and `flow-min tags play|random|export`.
 - **A row is only deleted when nothing is left to remember** — not liked, not
   downloaded, not on speed dial, no `song` path, *and* `song_count == 0` —
   so a play count survives an unlike or a delete.

@@ -35,8 +35,7 @@ and dispatches to handler functions.
   downloads, the library, MPRIS/DBus metadata).
 - `get_entry(url)` — full entry for a watch URL, run through
   `sponsor.stream_info()` so SponsorBlock segments are attached. Music ids
-  are resolved through yt-dlp like any other video, so playback and
-  download-time tag extraction (language/artist via `tags.tags_from_info`)
+  are resolved through yt-dlp like any other video, so playback and downloads
   are unchanged.
 - `download_url(url, outdir, fmt)` — downloads and post-processes the audio;
   non-`webm` formats go through ffmpeg (`FFmpegExtractAudio`).

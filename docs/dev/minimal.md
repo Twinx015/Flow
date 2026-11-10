@@ -9,7 +9,7 @@ that has no colour, a cron job, a script, or an agent driving the player.
 flow-min status                     one line of player state
 flow-min play "karan aujla 52 bars" search YouTube and play the top hit
 flow-min --json search "arijit singh"
-flow-min lang punjabi -s            play every downloaded punjabi song, shuffled
+flow-min tags play workout -s       play every downloaded "workout" song, shuffled
 flow-min next                       skip, from any terminal
 ```
 
@@ -32,7 +32,7 @@ Three rules define it:
 | `minimal/out.py` | `init`/`emit`/`fail`/`quiet`/`fork_bg` — output, exit codes, fd silencing, background fork |
 | `minimal/common.py` | shared helpers: `ns()`, `live_player()`, `signal()`, `clock`, `entry_url`, `current`, `library_rows`, `song_line` |
 | `minimal/core.py` | status, transport control, search, `play`/`play-off`/`resume`, queue playback, `_spawn` |
-| `minimal/local.py` | `list`, `liked`, `like`, `unlike`, `download`, `delete`, `rename`, `lang`, `artist` |
+| `minimal/local.py` | `list`, `liked`, `like`, `unlike`, `download`, `delete`, `rename` |
 | `minimal/extras.py` | `radio`, `radio-off`, `tags`, `lyrics`, `playlist` |
 | `minimal/stats.py` | `history`, `stats` |
 | `minimal/__main__.py` | `python -m minimal` |
@@ -108,7 +108,7 @@ Two things are deliberate:
 | ----- | -------- |
 | Player | `status`, `play`, `play-off`, `resume`, `search`, `stop`, `pause`, `next`, `prev`, `seek`, `seek-back` |
 | Library | `list`/`ls`, `liked`, `like`, `unlike`, `download`/`dl`, `delete`, `rename` |
-| Tags, radio, lyrics | `lang`, `artist`, `radio`, `radio-off`, `tags`, `lyrics` |
+| Tags, radio, lyrics | `tags` (`list`, `play`, `random`, `export`, `add`, `remove`, `rename`, `delete`), `radio`, `radio-off`, `lyrics` |
 | Collections, history | `playlist`/`pl`, `history`, `stats` |
 
 Suffixes mirror the main CLI: `play` is online search, `play-off` is a local
@@ -119,7 +119,9 @@ part of the query.
 
 `search` writes its rows to `~/.flow/search.json` (tmp + `os.replace`, like
 every other JSON file under `~/.flow`) and `play` reads them back when its
-argument is a bare number, so the pick costs no second search and no prompt:
+argument is a bare number, so the pick costs no second search and no prompt.
+A YouTube link passed to `search`, `play` or `download` resolves to that one
+video instead of being sent to the search API:
 
 ```console
 $ flow-min search "night changes"

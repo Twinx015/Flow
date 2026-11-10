@@ -66,7 +66,7 @@ in the TUI and it is liked in the web GUI and the shell too.
 - Like and unlike, with optional auto-download on like
 - Play counts in both modes, `flow summary` in the CLI and a History panel in the web GUI
 - Rename a misspelt title once and every surface, lyrics search included, uses the new name
-- Play by tag: `lang punjabi` or `artist karan` plays matching songs from your library
+- User tags: play a whole tag, one random song, or export just that tag's songs
 
 **Lyrics**
 

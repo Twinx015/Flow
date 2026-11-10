@@ -3,6 +3,7 @@
 import json
 import os
 import pathlib
+import random
 
 from backend import config, library, registry, status
 from backend.Offline import commands as off_commands
@@ -175,9 +176,19 @@ def _play_saved(index, shuffle=False, foreground=False):
 
 
 def play(query, index=1, shuffle=False, foreground=False):
-    """Play a YouTube search result; a bare number picks a row of the last search."""
+    """Play a YouTube search result or direct link; a bare number picks a saved row."""
     if query.strip().isdigit():
         _play_saved(int(query), shuffle=shuffle, foreground=foreground)
+        return
+    video_id = youtube.video_id_from_url(query)
+    if video_id:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        with out.quiet():
+            info = youtube.get_entry(url)
+        if not info:
+            out.fail(f"could not resolve a stream for {query!r}")
+        title = info.get("title") or ""
+        _play_online(info, title, shuffle=shuffle, foreground=foreground)
         return
     with out.quiet():
         results = youtube.search(query, config.MAX_SEARCH_RESULTS)
@@ -202,17 +213,19 @@ def play_off(query, shuffle=False, foreground=False):
     _play_file(matches[0], shuffle=shuffle, foreground=foreground, matches=len(matches))
 
 
-def play_paths(paths, foreground=False, label=None):
+def play_paths(paths, foreground=False, label=None, shuffle=False, repeat=False, repeat_count=0):
     """Play a queue of downloaded files."""
     paths = [pathlib.Path(p) for p in paths]
     if not paths:
         out.fail("nothing to play")
+    if shuffle:
+        random.shuffle(paths)
     payload = {
         "status": "playing",
         "tracks": len(paths),
         "title": lib.display_name(paths[0]),
     }
-    args = ns(shuffle=False, bg=False)
+    args = ns(shuffle=False, bg=False, repeat=repeat, repeat_count=repeat_count)
     if foreground:
         with out.quiet():
             off_commands._play_queue(paths, args)

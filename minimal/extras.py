@@ -44,17 +44,60 @@ def radio_off(seed=None, limit=None):
     core.play_paths(paths, label=f"radio  {len(paths)} local tracks")
 
 
-def tags(action="list", args=None):
-    """Show tags, or maintain the free-form ones: add/remove/rename/delete."""
+def tags(action="list", args=None, shuffle=False, repeat=False, repeat_count=0, path=None):
+    """Show user tags, or play/export/maintain them."""
     args = list(args or [])
     if action in (None, "list"):
-        languages, artists = library.get_tag_counts()
-        custom = library.all_song_tags()
-        rows = [{"kind": "language", "tag": tag, "count": count} for tag, count in languages]
-        rows += [{"kind": "artist", "tag": tag, "count": count} for tag, count in artists]
-        rows += [{"kind": "tag", "tag": tag, "count": count} for tag, count in custom]
-        text = [f"{row['kind']:<8}  {row['tag']}  {row['count']}" for row in rows]
+        rows = [
+            {"kind": "tag", "tag": tag, "count": count}
+            for tag, count in library.all_song_tags()
+        ]
+        text = [f"{row['tag']}  {row['count']}" for row in rows]
         out.emit(rows, text or ["no tags yet"])
+        return
+    if action in ("play", "random"):
+        tag = " ".join(args).strip()
+        if not tag:
+            out.fail(f"tags {action} needs a tag: tags {action} <tag>")
+        with out.quiet():
+            rows = library.songs_with_tag(tag)
+        paths = [row["song"] for row in rows if row.get("song")]
+        if not paths:
+            out.fail(f"no downloaded songs tagged {tag!r}")
+        if action == "random":
+            paths = [random.choice(paths)]
+            shuffle = repeat = False
+        core.play_paths(
+            paths,
+            label=f"playing  {len(paths)} track(s) tagged {tag}",
+            shuffle=shuffle,
+            repeat=repeat,
+            repeat_count=repeat_count,
+        )
+        return
+    if action == "export":
+        rest = list(args)
+        dest = config.export_dest(rest) or (
+            str(pathlib.Path(path).expanduser()) if path else None
+        )
+        tag = " ".join(rest).strip()
+        if not tag:
+            out.fail("tags export needs a tag: tags export <tag> [-p <dir>]")
+        with out.quiet():
+            rows = library.songs_with_tag(tag)
+        if not rows:
+            out.fail(f"no downloaded songs tagged {tag!r}")
+        dest = dest or str(pathlib.Path.home() / "Downloads" / config._safe_filename(tag))
+        with out.quiet():
+            copied, tagged, out_dir = config.export_flow(
+                dest, {row["video_id"] for row in rows}
+            )
+        if not copied:
+            out.fail(f"no files to export for tag {tag!r}")
+        out.emit(
+            {"status": "exported", "tag": tag, "songs": copied, "path": str(out_dir)},
+            f"exported  {copied} song(s) tagged '{tag}'  ->  {out_dir}",
+        )
         return
     if action in ("add", "remove"):
         if len(args) < 2:
@@ -94,7 +137,9 @@ def tags(action="list", args=None):
             f"deleted  '{tag}'  ({changed} song(s))",
         )
         return
-    out.fail(f"unknown tags action {action!r}; use list, add, remove, rename or delete")
+    out.fail(
+        f"unknown tags action {action!r}; use list, play, random, export, add, remove, rename or delete"
+    )
 
 
 def lyrics():

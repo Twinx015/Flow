@@ -114,7 +114,7 @@ COMMANDS = {
     "download": "Download audio from YouTube | -f <format> (opus, m4a, mp3, webm)",
     "delete": "Delete a downloaded song (alias: dl-d)",
     "artist": "Play songs by artist | artist <name> | -s shuffle",
-    "tags": "Library tags | tags (editor) | tags list/add/remove/rename/delete",
+    "tags": "Library tags | tags (editor) | tags list/add/remove/rename/delete/play/random/export",
     "playlist": "Manage playlists | create add remove list play rename move dup merge sort clear dedupe info export import download | search <query> -d|-dm (YouTube playlists)",
     "switch": "Switch to Offline mode",
     "help": "Show this help message",
@@ -133,14 +133,18 @@ def run(cmd: str, extra: list[str], args):
     inf = "-i" in extra
     extra = [x for x in extra if x != "-i"]
     playlist_name = None
-    if "-p" in extra and cmd != "export":
+    if "-p" in extra and cmd not in ("export", "tags"):
         pi = extra.index("-p")
         extra = extra[:pi] + extra[pi + 1 :]
         if extra and not extra[0].startswith("-"):
             playlist_name = extra.pop(0)
         setattr(args, "save_playlist", playlist_name or True)
     extra, args = (
-        merge_flags(extra, args)
+        merge_flags(
+            extra,
+            args,
+            passthrough=("-p", "--path") if cmd == "tags" else (),
+        )
         if cmd not in ("config", "check", "short", "summary", "export")
         else (extra, args)
     )
@@ -495,9 +499,10 @@ def play(extra: list[str], args):
         print("No results found")
         return
 
+    link = youtube.video_id_from_url(arg)
     if repeat or shuffle or getattr(args, "multi", False):
         if getattr(args, "multi", False):
-            picks = _pick_indices(arg, args)
+            picks = [0] if link else _pick_indices(arg, args)
             if not picks:
                 return
             results = [_last_results[p] for p in picks]
@@ -507,7 +512,7 @@ def play(extra: list[str], args):
             random.shuffle(results)
         _play_queue(results, args)
     else:
-        picks = _pick_indices(arg, args)
+        picks = [0] if link else _pick_indices(arg, args)
         if not picks:
             return
         entry, title, _ = _last_results[picks[0]]
@@ -993,7 +998,8 @@ def search(query: str, args=None):
         action = "Download"
     else:
         action = "Play"
-    picks = _pick_indices(query, args, action=action)
+    link = youtube.video_id_from_url(query)
+    picks = [0] if link else _pick_indices(query, args, action=action)
     if not picks:
         return
     entries = [_last_results[p] for p in picks]
@@ -1322,7 +1328,11 @@ def download(extra: list[str], args=None):
         if not _last_results:
             e("     No results found")
             return
-        picks = _pick_indices(arg, args, action="Download")
+        picks = (
+            [0]
+            if youtube.video_id_from_url(arg)
+            else _pick_indices(arg, args, action="Download")
+        )
         if not picks:
             return
         entries = [_last_results[p] for p in picks]

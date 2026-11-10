@@ -133,7 +133,7 @@ def _box(title: str, rows: list[tuple], width: int) -> None:
 
 
 def _top_tag(rows: list[dict], key: str) -> str:
-    """`<tag> (N plays)` for the artist/language that owns the most plays."""
+    """`<tag> (N plays)` for the artist that owns the most plays."""
     counts: dict[str, int] = {}
     for row in rows:
         for part in re.split(r",\s*", (row.get(key) or "").strip()):
@@ -201,7 +201,6 @@ def show_stats() -> None:
         "Top plays",
         [
             ("top artist", _top_tag(rows, "artist")),
-            ("top language", _top_tag(rows, "language")),
             ("top song", _top_song(rows)),
         ],
         width,
@@ -293,8 +292,8 @@ def cmd_summary(extra: list[str], args=None) -> None:
 
 def print_help() -> None:
     print(f"{T}summary{R} {M}[-l] [-s sort] [--top N] [-c]{R}")
-    print(f"{G}  Play statistics: the online/offline split, the top artist,{R}")
-    print(f"{G}  language and song, and the ranked per-song table.{R}")
+    print(f"{G}  Play statistics: the online/offline split, the top artist{R}")
+    print(f"{G}  and song, and the ranked per-song table.{R}")
     print(
         f"  {M}-l{R}          {G}List the per-song table instead of the stats card{R}"
     )

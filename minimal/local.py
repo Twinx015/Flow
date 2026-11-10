@@ -1,13 +1,12 @@
-"""Downloaded library: listing, likes, downloads, renames, tag playback."""
+"""Downloaded library: listing, likes, downloads and renames."""
 
 import pathlib
-import random
 
 from backend import config, library
 from backend.Offline import file as lib
 from backend.Online import youtube
 
-from . import core, out
+from . import out
 from .common import current, entry_url, library_rows, song_line
 
 
@@ -114,30 +113,6 @@ def rename(query, new_name):
         {"status": "renamed", "video_id": video_id, "title": library.get_title(video_id)},
         f"renamed  {old_name} -> {new_name}",
     )
-
-
-def lang(tag, shuffle=False, limit=None):
-    """Play every downloaded song with a language tag."""
-    _play_tag("language", tag, shuffle, limit)
-
-
-def artist(tag, shuffle=False, limit=None):
-    """Play every downloaded song with an artist tag."""
-    _play_tag("artist", tag, shuffle, limit)
-
-
-def _play_tag(field, tag, shuffle, limit):
-    rows = library.get_tag_rows(field, tag)
-    if not rows:
-        out.fail(f"no downloaded songs tagged {field}={tag!r}; try: flow-min tags")
-    if limit:
-        rows = rows[:limit]
-    if shuffle:
-        random.shuffle(rows)
-    paths = [row["song"] for row in rows if row.get("song")]
-    if not paths:
-        out.fail(f"no playable files tagged {field}={tag!r}")
-    core.play_paths(paths, label=f"playing  {len(paths)} {field}={tag} track(s)")
 
 
 def _one_download(query):

@@ -28,7 +28,12 @@ _FLAG_MAP = {"-bg": "bg", "-s": "shuffle", "-d": "download", "-m": "multi"}
 _SHORT_FLAGS = {"d": "download", "s": "shuffle", "m": "multi"}
 
 
-def merge_flags(extra: list[str], args) -> tuple[list[str], object]:
+def merge_flags(extra: list[str], args, passthrough=()):
+    """Fold known `-` flags into `args` and return the remaining words.
+
+    Flags named in `passthrough` (with their value, if any) stay in the returned
+    words so the command can parse them itself, e.g. `tags export <tag> -p DIR`.
+    """
     rest = []
     i = 0
     while i < len(extra):
@@ -46,6 +51,11 @@ def merge_flags(extra: list[str], args) -> tuple[list[str], object]:
                 i += 1
             else:
                 print(f"Unknown flag: {item}")
+        elif item in passthrough:
+            rest.append(item)
+            if i + 1 < len(extra) and not extra[i + 1].startswith("-"):
+                rest.append(extra[i + 1])
+                i += 1
         elif item in _FLAG_MAP:
             setattr(args, _FLAG_MAP[item], True)
         elif (
@@ -445,11 +455,13 @@ _ART_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav"}
 
 
 def export_dest(extra: list[str]) -> str | None:
-    """The ``-p PATH`` destination in a command's extra arguments, if any.
+    """Pop the ``-p PATH`` destination out of a command's arguments, if any.
 
     ``None`` means "no path given" — the caller then falls back to ~/Downloads.
+    The flag and its value are removed from ``extra`` so the remaining words are
+    just the command's own arguments.
     """
-    rest = list(extra)
+    rest = extra
     dest = None
     for flag in ("-p", "--path"):
         while flag in rest:
@@ -470,11 +482,12 @@ def _safe_filename(name: str) -> str:
     return cleaned[:120].strip(" .") or "song"
 
 
-def _export_sources() -> list:
+def _export_sources(stems=None) -> list:
     from backend import library
 
     if not DOWNLOAD_DIR.exists():
         return []
+    wanted = {str(stem) for stem in stems} if stems is not None else None
     try:
         index = library.load()
     except Exception:
@@ -486,6 +499,8 @@ def _export_sources() -> list:
     sources, seen = [], set()
     for path in paths:
         if path.suffix.lower() not in AUDIO_EXTENSIONS or path.stem in seen:
+            continue
+        if wanted is not None and path.stem not in wanted:
             continue
         seen.add(path.stem)
         entry = index.get(path.stem) or {}
@@ -545,21 +560,21 @@ def _tag_song(path: pathlib.Path, tags: dict) -> bool:
         tmp.unlink(missing_ok=True)
 
 
-def export_flow(dest: str | None = None):
+def export_flow(dest: str | None = None, stems=None):
     out_dir = (
         pathlib.Path(dest).expanduser()
         if dest
         else pathlib.Path.home() / "Downloads" / "songs"
     )
-    sources = _export_sources()
+    sources = _export_sources(stems)
     if not sources:
         print(f"{Muted}No downloaded songs in {DOWNLOAD_DIR}{Reset}")
-        return
+        return 0, 0, out_dir
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         print(f"{RED}Cannot write to {out_dir}: {exc}{Reset}")
-        return
+        return 0, 0, out_dir
     if not _ffmpeg_exe():
         print(f"{YELLOW}ffmpeg not found — copying songs without tags.{Reset}")
         print(f"{GREY}  Install ffmpeg to write title/artist/album into them.{Reset}")
@@ -586,6 +601,7 @@ def export_flow(dest: str | None = None):
         print(f"  {Primary}{out.name}{Reset} {Muted}<- {src.name}{Reset}")
     line = f"Exported {copied} song{'' if copied == 1 else 's'} to {out_dir}"
     print(f"{GREEN}{line}{Reset} {GREY}({tagged} tagged){Reset}")
+    return copied, tagged, out_dir
 
 
 _FILLER_WORDS = {

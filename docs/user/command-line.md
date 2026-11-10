@@ -73,7 +73,9 @@ unless it backgrounds itself:
 ```bash
 flow play never gonna give you up     # foreground playback
 flow play never gonna give you up -bg # background playback
+flow play https://youtu.be/dQw4w9WgXcQ # play a link directly
 flow search daft punk          # print results, exit
+flow search https://youtu.be/dQw4w9WgXcQ # resolve one link
 flow radio daft punk           # radio mix (auto-bg)
 flow playlist list
 flow plist list                 # plist is the playlist alias
@@ -120,19 +122,17 @@ download the matching index can be used the same way.
 
 | Command                        | Description                                                                                                                                                                                                                       |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `play <name, index, or liked>` | Play a song by name or search-result number; offline also supports `play liked` and `play all`. `-m` plays a ticked selection as a queue                                                                                          |
-| `search <query>`               | Search YouTube (online) or the local library (offline); `-dm` downloads a ticked selection                                                                                                                                        |
+| `play <name, link, index, or liked>` | Play a song by name, YouTube link or search-result number; offline also supports `play liked` and `play all`. `-m` plays a ticked selection as a queue                                                                          |
+| `search <query or link>`       | Search YouTube (online) or the local library (offline); a YouTube link resolves to that one track; `-dm` downloads a ticked selection                                                                                             |
 | `list`                         | List the local library (offline; alias `ls`)                                                                                                                                                                                      |
 | `savan <name>`                 | Play a song from JioSaavn (online)                                                                                                                                                                                                |
 | `savan-s <query>`              | Search JioSaavn (online)                                                                                                                                                                                                          |
 | `radio <name> [index]`         | Radio mix (online) or shuffle-loop library (offline). Bare `radio` shuffles everything; a name seeds the loop with that song. `-p` saves as playlist                                                                              |
 | `like` / `unlike`              | Like/unlike the current song; liked songs are saved to the library and played with `play liked`                                                                                                                                   |
-| `download <query or index>`    | Save a streamed song (online; `-f <format>` picks opus/m4a/mp3/webm). Add `-m` to tick and download several                                                                                                                       |
+| `download <query, link or index>`    | Save a streamed song (online; `-f <format>` picks opus/m4a/mp3/webm). Add `-m` to tick and download several                                                                                                                       |
 | `delete <name or index>`       | Delete a downloaded song (alias: `dl-d`)                                                                                                                                                                                          |
 | `rename <name or index>`       | Rename a downloaded song (offline; alias: `re`). You are then asked for the new name. An index is the number in the `list` output (ascending by name) and the prompt repeats it                                                   |
-| `lang <tag>`                   | Play every downloaded song with that language tag (offline). One word — `hindi`, `punjabi`, `telugu`, ... — set when the song was downloaded. Partial words work (`lang pun`); `-s` shuffles                                      |
-| `artist <name>`                | Play every song by that artist. Offline plays your downloads, online plays the YouTube results whose title credits the artist (falling back to the current track's artist). Partial words work; `-s` shuffles (alias: `ar`)       |
-| `tags [list \| add \| remove \| rename \| delete]` | Inspect or maintain tags. Bare `tags` opens an interactive editor (delete/clear steps multi-select); `tags add <song> <tag>` / `tags remove <song> <tag>` tag a song, `tags rename <old> <new>` renames a free-form tag everywhere, `tags delete <tag>` drops it everywhere |
+| `tags [list \| add \| remove \| rename \| delete \| play \| random \| export]` | Inspect or maintain user tags. Bare `tags` opens an interactive menu (play all, play one/random, export, add/remove songs, rename, delete, list); `tags play <tag> [-r] [-s]` plays every song in a tag (repeat/shuffle), `tags random <tag>` plays one, `tags export <tag> [-p <dir>]` copies only that tag's songs, `tags add <song> <tag>` / `tags remove <song> <tag>` tag one song, `tags rename <old> <new>` renames a tag everywhere, `tags delete <tag>` drops it everywhere |
 | `playlist <sub>`               | Manage playlists — see below                                                                                                                                                                                                      |
 | `switch`                       | Toggle between online and offline mode                                                                                                                                                                                            |
 | `config [target [value]]`      | Change settings; run bare for an interactive wizard                                                                                                                                                                               |
@@ -149,7 +149,7 @@ download the matching index can be used the same way.
 `summary` reports what you've been playing. The stats card splits the
 numbers — **combined** plays (both modes, from `~/.flow/library.db`),
 **online** plays (`~/.flow/history.db`) and **offline** (the difference) —
-then lists your top artist, top language and top song, and charts the last
+then lists your top artist and top song, and charts the last
 7 days: one bar per calendar day with online (`█`) and offline (`░`)
 stacked, ending in `online/offline` counts, plus a progress bar comparing
 **this week vs last week**. Days run midnight to midnight, so `today` and the
@@ -187,50 +187,35 @@ and filter to today / 7 days / 30 days. The split is deliberate — the CLI
 ranks a per-song table (a terminal is bad at a long event log), the web panel
 sorts an event stream (a scrollable column is bad at aggregates).
 
-### lang / artist / tags
+### tags
 
-Every download stores two tags in `~/.flow/library.db`: a one-word **language**
-(`hindi`, `punjabi`, `telugu`, …) and the **artist**. They come from YouTube's
-own metadata — its language field, else the script the title is written in, and
-the credited artist (never the channel name). Everything else in a music video's
-title and description — credits, hashtags, `(Official Video)` — is thrown away.
-
-```bash
-flow tags list                # what you can play by right now
-flow lang hindi               # every hindi download, ascending by name
-flow lang pun -s              # partial word, shuffled
-flow artist karan             # every Karan Aujla song, ascending by name
-flow artist "Arijit Singh"    # matches on part of the name, not just the start
-```
-
-`lang` is offline-only, since it filters your downloads. `artist` works in both
-modes: offline it filters your library the same way; online there is no library
-to filter, so it keeps the search results whose **title** credits the artist and,
-when none of them do, falls back to the artist of the track that is playing.
-
-Songs downloaded before tags existed have none. `tags` maintains them. Bare
-`tags` opens an interactive editor — pick language, artist or free-form tags,
-then set a value on songs, rename it everywhere or delete it everywhere. The
-plain forms are scriptable:
+Tags are yours. Downloads no longer create language or artist tags, and values
+left by an older version are cleared once; the `language` and `artist` columns
+stay only so old databases open cleanly. Assign whatever tags help you —
+`workout`, `roadtrip`, a mood, a language, an artist — with `tags add`.
 
 ```bash
-flow tags                      # interactive editor (in the shell)
-flow tags list                 # languages + artists + free-form tags
-flow tags add "Mitti" workout  # free-form tag on one song
+flow tags                      # interactive menu (in the shell)
+flow tags list                 # every tag and how many songs use it
+flow tags play workout         # play the whole tag, ascending by name
+flow tags play workout -s      # shuffled
+flow tags play workout -r 3    # repeat the queue three times (0 = forever)
+flow tags random workout       # play one random song from the tag
+flow tags export workout       # copy the tag's songs to ~/Downloads/workout
+flow tags export workout -p ~/Music/workout
+flow tags add "Mitti" workout  # tag one downloaded song
 flow tags remove "Mitti" workout
-flow tags rename workout gym    # on every song that has it
-flow tags delete workout
+flow tags rename workout gym   # on every song that has it
+flow tags delete workout       # drop it everywhere
 ```
 
-Every song-picking step checks a checkbox list, and the delete steps let you
-pick several tags at once — `flow tags`, pick *Free-form tags → Delete
-tag(s) everywhere* (or the language/artist equivalent), tick two or three
-tags with space, confirm, and they are all gone.
+Bare `tags` is the interactive menu: play all songs in a tag, play a single or
+random one, export a tag, add or remove songs (checkbox lists), rename, delete
+and list. Every action is available without the menu through the forms above.
 
-`language` and `artist` come from YouTube's metadata at download time —
-`tags` fixes or extends them by hand. Free-form tags (`workout`, `roadtrip`,
-…) are yours to assign: create one with `tags add`, tidy up with
-rename/delete.
+`tags export` uses the same copy-and-write-metadata path as `export`, but only
+for the selected tag's songs; without `-p` it writes to
+`~/Downloads/<tag>`.
 
 ### export
 
@@ -330,7 +315,7 @@ flow-min play-off 52 bars           play a downloaded song
 flow-min search "arijit singh"      list the results as 1..N
 flow-min play 2                     play row 2 of that search
 flow-min --json search "arijit singh" | jq '.[0].video_id'
-flow-min lang punjabi -s            play every downloaded punjabi song, shuffled
+flow-min tags play workout -s       play every downloaded "workout" song, shuffled
 flow-min next                       skip, from any terminal
 ```
 
@@ -342,7 +327,7 @@ reports the range.
 The commands are the part of the table above that never needs a conversation:
 `status`, `play`, `play-off`, `resume`, `search`, `stop`, `pause`, `next`,
 `prev`, `seek`, `seek-back`, `list`, `liked`, `like`, `unlike`, `download`,
-`delete`, `rename`, `lang`, `artist`, `radio`, `radio-off`, `tags`, `lyrics`,
+`delete`, `rename`, `radio`, `radio-off`, `tags`, `lyrics`,
 `playlist`, `history`, `stats`. The conversational ones — `config`, `switch`,
 `summary`, `export`, the shortcuts and the dependency check — stay with
 `flow`.
