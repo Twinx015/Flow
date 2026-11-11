@@ -45,6 +45,7 @@ backend/               # all logic
   cli_raw.py           #   gated raw-CLI bridge for the daemon
   plugin_api/          #   flow_api.py — self-contained v4 plugin client
   help_detail.py       #   `help -i` text
+  metadata.py          #   resumable `flow --meta` library refresh
   Hyprland/island.qml  #   optional quickshell widget (--setup-island)
   Online/              # online mode
     commands.py        #   command dispatch + COMMANDS dict

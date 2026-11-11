@@ -103,6 +103,7 @@ def _nav_delta():
 
 COMMANDS = {
     "play": "Play a song from YouTube",
+    "random": "Play random downloaded songs | random [n]",
     "search": "Search YouTube for tracks",
     "import": "Import CSV/m3u/txt list | flow --import FILE (playlist / download / play)",
     "savan": "Play a song from JioSaavn (alias: svn)",
@@ -150,6 +151,8 @@ def run(cmd: str, extra: list[str], args):
     )
     if cmd == "play":
         play(extra, args)
+    elif cmd == "random":
+        off_commands.random_songs(extra, args)
     elif cmd == "search":
         search(" ".join(extra) if extra else "", args)
     elif cmd == "import":

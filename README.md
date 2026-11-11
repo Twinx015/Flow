@@ -56,7 +56,7 @@ in the TUI and it is liked in the web GUI and the shell too.
 - Automatic online/offline detection with a manual `switch`
 - YouTube search and streaming, radio mixes and JioSaavn (`savan`)
 - Offline library with search, tab completion and liked songs
-- Repeat (`-r [n]`), shuffle (`-s`) and background play (`-bg`)
+- Repeat (`-r [n]`), shuffle (`-s`), random songs (`random [n]`) and background play (`-bg`)
 - Audio-reactive spectrum visualizer, or synced lyrics, while a track plays
 
 **Library**
@@ -66,6 +66,7 @@ in the TUI and it is liked in the web GUI and the shell too.
 - Like and unlike, with optional auto-download on like
 - Play counts in both modes, `flow summary` in the CLI and a History panel in the web GUI
 - Rename a misspelt title once and every surface, lyrics search included, uses the new name
+- Re-fetch metadata for the whole library (`flow --meta`), resuming after a YouTube IP block
 - User tags: play a whole tag, one random song, or export just that tag's songs
 
 **Lyrics**
@@ -144,6 +145,7 @@ flow                                      # interactive shell (type `help`)
 flow-tui                                  # full-screen TUI
 flow-web                                  # web GUI at http://127.0.0.1:5000
 flow-min status --json                    # one JSON document, script-friendly
+flow-min --random 3                       # play three random downloaded songs
 ```
 
 `-pl` and `-sh` are built-in shortcuts for `play` and `search`. You can add

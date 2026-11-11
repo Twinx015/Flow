@@ -356,6 +356,44 @@ def test_list_songs_json_keeps_metadata(capfd):
     assert row["duration"] == 42
 
 
+def test_list_info_shows_artist_paths_and_thumbnail(capfd):
+    path = _downloaded(IDS["list"], "Info Anthem", {"artist": "Alpha"})
+    start()
+    local.list_songs(query="Info Anthem", info=True)
+    line = read(capfd)[0].strip()
+    assert line.startswith("1. Info Anthem | Alpha | ")
+    assert str(path) in line
+    assert str(library.thumbnail_path(IDS["list"])) in line
+
+
+def test_list_info_json_includes_the_thumbnail_path(capfd):
+    path = _downloaded(IDS["list"], "Info Anthem", {"artist": "Alpha"})
+    start(as_json=True)
+    local.list_songs(query="Info Anthem", info=True)
+    row = json.loads(read(capfd)[0])["songs"][0]
+    assert row["path"] == str(path)
+    assert row["thumbnail"] == str(library.thumbnail_path(IDS["list"]))
+
+
+def test_play_random_samples_the_library(monkeypatch):
+    paths = [pathlib.Path(f"/tmp/rand{index}.opus") for index in range(5)]
+    seen = []
+    monkeypatch.setattr(core.lib, "get_songs", lambda: paths)
+    monkeypatch.setattr(core, "play_paths", lambda picks, **kw: seen.extend(picks))
+    core.play_random(3)
+    assert len(seen) == 3
+    assert set(seen) <= set(paths)
+
+
+def test_play_random_caps_at_the_library_size(monkeypatch):
+    paths = [pathlib.Path("/tmp/only.opus")]
+    seen = []
+    monkeypatch.setattr(core.lib, "get_songs", lambda: paths)
+    monkeypatch.setattr(core, "play_paths", lambda picks, **kw: seen.extend(picks))
+    core.play_random(10)
+    assert seen == paths
+
+
 def test_rename_uses_the_previous_name(capfd):
     _downloaded(IDS["rename"], "Anthem")
     start()
@@ -483,6 +521,8 @@ def test_parser_covers_every_command():
         ["seek-back", "10"],
         ["list", "--query", "karan", "--limit", "5"],
         ["ls"],
+        ["ls", "-i"],
+        ["ls", "--info"],
         ["liked"],
         ["liked", "--limit", "2"],
         ["like"],
@@ -529,6 +569,13 @@ def test_parser_keeps_multi_word_arguments_whole():
     assert parser.parse_args(["delete", "some", "anthem"]).query == ["some", "anthem"]
     assert parser.parse_args(["rename", "old", "anthem", "--to", "New", "Name"]).new_name == ["New", "Name"]
     assert parser.parse_args(["rename", "old", "anthem", "--to", "New", "Name"]).query == ["old", "anthem"]
+
+
+def test_random_flag_defaults_to_one_song():
+    parser = main.build_parser()
+    assert parser.parse_args(["--random"]).random == 1
+    assert parser.parse_args(["--random", "4"]).random == 4
+    assert parser.parse_args(["ls", "-i"]).info is True
 
 
 def test_namespace_defaults_do_not_double_fork():

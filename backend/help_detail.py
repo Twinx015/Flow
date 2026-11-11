@@ -40,6 +40,14 @@ def _online_help():
             f"    {G}play liked{R} {M}-s{R}",
             f"    {G}play never gonna{R} {M}-d{R}",
         ],
+        "random": [
+            f"{T}> random{R} {M}[n]{R}",
+            f"{G}  Play one or more random downloaded songs.{R}",
+            f"  {M}[n]{R}  {G}How many songs to play (default 1){R}",
+            f"  {G}Examples:{R}",
+            f"    {G}random{R}",
+            f"    {G}random 5{R}",
+        ],
         "search": [
             f"{T}> search{R} {M}<query | link>{R}",
             f"{G}  Search YouTube for tracks. Lists results with indices.{R}",
@@ -260,6 +268,14 @@ def _offline_help():
             f"    {G}play all{R} {B}-s{R}",
             f"    {G}play liked{R}",
             f"    {G}play Greatest Hits{R}",
+        ],
+        "random": [
+            f"{T}> random{R} {B}[n]{R}",
+            f"{G}  Play one or more random songs from the library.{R}",
+            f"  {B}[n]{R}  {G}How many songs to play (default 1){R}",
+            f"  {G}Examples:{R}",
+            f"    {G}random{R}",
+            f"    {G}random 5{R}",
         ],
         "search": [
             f"{T}> search{R} {B}<query>{R}",

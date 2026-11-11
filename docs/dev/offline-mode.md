@@ -34,6 +34,7 @@ are named by video id.
 | Command | Behavior |
 | ------- | -------- |
 | `play` | Play song(s) from the library; `play all` plays everything, `play liked` plays the liked folder; multiple matches prompt for a pick |
+| `random [n]` | Play `n` random songs from the library (default 1) |
 | `search` | Filter the library by substring (file name or display title) |
 | `list` | List the local library |
 | `radio` | Shuffle and loop the library (or a seed), `Ctrl+C` next, `Ctrl+Q` quit |

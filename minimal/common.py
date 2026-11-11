@@ -118,6 +118,7 @@ def library_rows(query=None, liked=None):
                 "plays": int(entry.get("song_count") or 0),
                 "liked": bool(entry.get("liked")),
                 "path": entry.get("song") or "",
+                "thumbnail": entry.get("thumbnail") or library.thumbnail_path(video_id),
             }
         )
     if query:

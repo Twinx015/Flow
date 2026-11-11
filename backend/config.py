@@ -747,13 +747,21 @@ def extract_song(title):
     return parse_title(title or "", _tile_context())["title"]
 
 
+def clean_title(title, max_words=None):
+    """Tile-parse a raw title, optionally capping it at `max_words`."""
+    text = extract_song(title or "")
+    if not max_words:
+        return text
+    words = text.split()
+    result = " ".join(words[:max_words])
+    return result + "..." if len(words) > max_words else result
+
+
 def _truncate_title(title):
     """Tile-clean plain-YouTube titles; YouTube Music titles are kept as-is."""
     if SearchSource != "youtube":
         return title or ""
-    words = extract_song(title).split()
-    result = " ".join(words[:MAX_WORDS])
-    return result + "..." if len(words) > MAX_WORDS else result
+    return clean_title(title, MAX_WORDS)
 
 
 def _load_colors():
@@ -1076,6 +1084,7 @@ def maybe_reload():
 
 
 DOWNLOAD_DIR = pathlib.Path.home() / ".flow/downloads"
+META_FILE = pathlib.Path.home() / ".flow/meta.json"
 
 try:
     from importlib.metadata import PackageNotFoundError

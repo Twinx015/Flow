@@ -20,6 +20,8 @@ examples:
   flow-min search "arijit singh"      list the results as 1..N
   flow-min play 2                     play row 2 of that search
   flow-min tags play workout -s       play every downloaded "workout" song, shuffled
+  flow-min ls -i                      list title | artist | file | thumbnail
+  flow-min --random 3                 play three random downloaded songs
   flow-min next                       skip, from anywhere
   flow-min tags list --json           list tags as JSON
 """
@@ -34,6 +36,14 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--json", action="store_true", help="print one JSON document instead of lines")
+    parser.add_argument(
+        "--random",
+        nargs="?",
+        const=1,
+        type=int,
+        metavar="N",
+        help="play N random downloaded songs (default 1)",
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -79,7 +89,15 @@ def build_parser():
     listing = add("list", "list downloaded songs", aliases=["ls"])
     listing.add_argument("--query", help="filter by title or artist")
     listing.add_argument("--limit", type=int)
-    listing.set_defaults(func=lambda a: local.list_songs(query=a.query, limit=a.limit))
+    listing.add_argument(
+        "-i",
+        "--info",
+        action="store_true",
+        help="show title | artist | file path | thumbnail path",
+    )
+    listing.set_defaults(
+        func=lambda a: local.list_songs(query=a.query, limit=a.limit, info=a.info)
+    )
     liked = add("liked", "list liked songs")
     liked.add_argument("--limit", type=int)
     liked.set_defaults(func=lambda a: local.liked(limit=a.limit))
@@ -175,6 +193,9 @@ def main(argv=None):
     out.init("--json" in argv)
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.random is not None:
+        core.play_random(args.random)
+        return 0
     if not getattr(args, "func", None):
         parser.print_help()
         return 0

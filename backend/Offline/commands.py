@@ -100,6 +100,7 @@ def _radio_sigquit(sig, frame):
 
 COMMANDS = {
     "play": "Play song(s) from local library | all by play all | and liked",
+    "random": "Play random songs | random [n]",
     "search": "Search local music library",
     "list": "List local music library",
     "radio": "Radio mode | shuffle & loop library (seed: radio <song>) | Ctrl+C next | Ctrl+Q quit",
@@ -207,6 +208,8 @@ def run(cmd: str, extra: list[str], args):
     )
     if cmd == "play":
         play(extra, args)
+    elif cmd == "random":
+        random_songs(extra, args)
     elif cmd == "search":
         search(" ".join(extra) if extra else "")
     elif cmd == "import":
@@ -593,6 +596,25 @@ def _play_all(args):
                 break
     except KeyboardInterrupt, _StopPlayback:
         pass
+
+
+def random_songs(extra, args):
+    """`random [n]` plays one or more random downloaded songs."""
+    count = 1
+    if extra:
+        if len(extra) > 1 or not extra[0].isdigit():
+            e("Usage: random [n]")
+            return
+        count = int(extra[0])
+    if count < 1:
+        e("random needs a positive count")
+        return
+    songs = lib.get_songs()
+    if not songs:
+        e("No downloaded songs yet")
+        return
+    picks = random.sample(songs, min(count, len(songs)))
+    _play_queue(picks, args)
 
 
 def like_track():

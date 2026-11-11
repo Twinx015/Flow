@@ -30,6 +30,7 @@ scripts, ssh sessions and agents.
 | `--status`          | Print the playback status card and exit                                   |
 | `--full`            | Full-screen now-playing view: clear the terminal, show the logo and a live progress card (refreshes every second; Ctrl-C to exit) |
 | `--summary`         | Play statistics; see [summary](#summary) below                            |
+| `--meta [force]`    | Re-fetch metadata for every downloaded song; resumes after a block, `force` restarts from the beginning |
 | `--like`            | Like the currently playing song (requires an active player)               |
 | `--unlike`          | Unlike the currently playing song                                         |
 | `--download`        | Download the currently playing song                                       |
@@ -123,6 +124,7 @@ download the matching index can be used the same way.
 | Command                        | Description                                                                                                                                                                                                                       |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `play <name, link, index, or liked>` | Play a song by name, YouTube link or search-result number; offline also supports `play liked` and `play all`. `-m` plays a ticked selection as a queue                                                                          |
+| `random [n]`                   | Play `n` random songs from the downloaded library (default 1)                                                                                                                                                                     |
 | `search <query or link>`       | Search YouTube (online) or the local library (offline); a YouTube link resolves to that one track; `-dm` downloads a ticked selection                                                                                             |
 | `list`                         | List the local library (offline; alias `ls`)                                                                                                                                                                                      |
 | `savan <name>`                 | Play a song from JioSaavn (online)                                                                                                                                                                                                |
@@ -244,6 +246,25 @@ place.
 Tagging needs `ffmpeg` (`flow check` will tell you if it's missing). Without
 it the songs are still copied, just untagged.
 
+### metadata refresh
+
+`flow --meta` re-fetches title, artist, album and duration for every
+downloaded song, and fills in any missing thumbnail. The video id is taken from
+the audio file name (`~/.flow/downloads/<video_id>.opus`), so no extra
+bookkeeping is needed.
+
+```bash
+flow --meta          # re-fetch, resuming an unfinished run
+flow --meta force    # ignore saved progress and start from the first song
+```
+
+Metadata requests can make YouTube temporarily block your IP. When that
+happens the command stops, prints how far it got, and saves progress in
+`~/.flow/meta.json`. Run the same command again after a break and it resumes
+from the first unfinished song instead of starting over. `flow --meta force`
+deletes that state and starts again from zero. The state file is removed once
+a run finishes. Files whose names are not a YouTube video id are skipped.
+
 ### Playlist subcommands
 
 `playlist` (alias `plist`): `create` · `add` · `remove` · `list` · `play` ·
@@ -316,6 +337,9 @@ flow-min search "arijit singh"      list the results as 1..N
 flow-min play 2                     play row 2 of that search
 flow-min --json search "arijit singh" | jq '.[0].video_id'
 flow-min tags play workout -s       play every downloaded "workout" song, shuffled
+flow-min ls -i                      title | artist | file path | thumbnail path
+flow-min --random                   play one random downloaded song
+flow-min --random 5                 play five random downloaded songs
 flow-min next                       skip, from any terminal
 ```
 
@@ -324,10 +348,21 @@ them instead of searching again — no prompt in between, and nothing to copy
 by hand. With no saved search it exits `1` and says so; a number past the end
 reports the range.
 
+`ls -i` (or `list -i`) prints one numbered row per downloaded song with the
+artist, file path and thumbnail path:
+
+```console
+$ flow-min ls -i
+1. Night Changes | One Direction | /home/me/.flow/downloads/abc123.opus | /home/me/.flow/thumbnails/abc123.jpg
+2. Mitti | Karan Aujla | /home/me/.flow/downloads/def456.opus | /home/me/.flow/thumbnails/def456.jpg
+```
+
+`--random [N]` plays `N` random downloaded songs (one when `N` is omitted).
+
 The commands are the part of the table above that never needs a conversation:
-`status`, `play`, `play-off`, `resume`, `search`, `stop`, `pause`, `next`,
-`prev`, `seek`, `seek-back`, `list`, `liked`, `like`, `unlike`, `download`,
-`delete`, `rename`, `radio`, `radio-off`, `tags`, `lyrics`,
+`status`, `play`, `play-off`, `random`, `resume`, `search`, `stop`, `pause`,
+`next`, `prev`, `seek`, `seek-back`, `list`, `liked`, `like`, `unlike`,
+`download`, `delete`, `rename`, `radio`, `radio-off`, `tags`, `lyrics`,
 `playlist`, `history`, `stats`. The conversational ones — `config`, `switch`,
 `summary`, `export`, the shortcuts and the dependency check — stay with
 `flow`.

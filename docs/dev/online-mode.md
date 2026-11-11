@@ -14,6 +14,7 @@ and dispatches to handler functions.
 | Command | Handler behavior |
 | ------- | ---------------- |
 | `play` | Search YouTube, pick the top result (or result index / `liked`), stream it |
+| `random [n]` | Play `n` random songs from the downloaded library |
 | `search` | Search YouTube, number the results for later `play <index>` |
 | `savan` / `savan-s` | JioSaavn play / search (aliases `svn`, `svn-s`) |
 | `radio` | Build a mix from a seed track (`-p` saves it as a playlist, `-d` downloads) |

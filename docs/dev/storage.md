@@ -13,6 +13,7 @@ crash mid-write can never truncate them. The two databases
 ├── library.json.bak       # pre-v0.9 store, kept after the one-time import
 ├── status.json            # current/last track (backend/status.py)
 ├── search.json            # rows of the last `flow-min search` (minimal/core.py)
+├── meta.json              # unfinished `flow --meta` pass (backend/metadata.py)
 ├── shortcuts.json         # command aliases (backend/shortcuts.py)
 ├── ignore.txt             # filler words stripped from titles
 ├── seek.txt               # pending seek delta in milliseconds

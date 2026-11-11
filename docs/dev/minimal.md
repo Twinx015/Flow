@@ -10,6 +10,8 @@ flow-min status                     one line of player state
 flow-min play "karan aujla 52 bars" search YouTube and play the top hit
 flow-min --json search "arijit singh"
 flow-min tags play workout -s       play every downloaded "workout" song, shuffled
+flow-min ls -i                      title | artist | file path | thumbnail path
+flow-min --random 3                 play three random downloaded songs
 flow-min next                       skip, from any terminal
 ```
 
@@ -106,8 +108,8 @@ Two things are deliberate:
 
 | Group | Commands |
 | ----- | -------- |
-| Player | `status`, `play`, `play-off`, `resume`, `search`, `stop`, `pause`, `next`, `prev`, `seek`, `seek-back` |
-| Library | `list`/`ls`, `liked`, `like`, `unlike`, `download`/`dl`, `delete`, `rename` |
+| Player | `status`, `play`, `play-off`, `resume`, `search`, `stop`, `pause`, `next`, `prev`, `seek`, `seek-back`, `--random [N]` |
+| Library | `list`/`ls` (`-i` adds artist, file and thumbnail paths), `liked`, `like`, `unlike`, `download`/`dl`, `delete`, `rename` |
 | Tags, radio, lyrics | `tags` (`list`, `play`, `random`, `export`, `add`, `remove`, `rename`, `delete`), `radio`, `radio-off`, `lyrics` |
 | Collections, history | `playlist`/`pl`, `history`, `stats` |
 
@@ -132,6 +134,10 @@ playing  One Direction - Night Changes  (pid 4123)
 
 Nothing saved means `flow-min: no saved search; run 'flow-min search <query>' first`
 and exit `1`; a number past the end reports the range the same way.
+
+`--random [N]` is the only flag that runs without a subcommand. It samples `N`
+downloaded songs (default 1) and plays them through the same queue path as
+`radio-off`; JSON output is the usual `{"status": "playing", ...}` payload.
 
 Playlist subcommands: `show` (default), `create`, `add`, `play`, `remove`,
 `clear`, `delete`.

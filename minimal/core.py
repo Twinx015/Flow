@@ -213,6 +213,26 @@ def play_off(query, shuffle=False, foreground=False):
     _play_file(matches[0], shuffle=shuffle, foreground=foreground, matches=len(matches))
 
 
+def play_random(count=1, foreground=False):
+    """Play one or more random downloaded songs."""
+    with out.quiet():
+        songs = lib.get_songs()
+    if not songs:
+        out.fail("no downloaded songs")
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        out.fail("random count must be a number")
+    if count < 1:
+        out.fail("random count must be at least 1")
+    picks = random.sample(songs, min(count, len(songs)))
+    play_paths(
+        picks,
+        foreground=foreground,
+        label=f"playing  {len(picks)} random track(s)",
+    )
+
+
 def play_paths(paths, foreground=False, label=None, shuffle=False, repeat=False, repeat_count=0):
     """Play a queue of downloaded files."""
     paths = [pathlib.Path(p) for p in paths]

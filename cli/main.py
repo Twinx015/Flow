@@ -20,6 +20,7 @@ from backend.Offline import commands as _offline_commands
 from backend.Online import commands as _online_commands
 from backend.ping import is_connected
 from backend.summary import SORTS as _SUMMARY_SORTS
+
 from cli import tui as tui_shell
 from cli.tui import input as tui_input
 from cli.tui import show_banner
@@ -59,13 +60,23 @@ def _send_web_command(port, command, payload=None):
 def _send_control(action, label, payload=None):
     from backend import ipc, logger, registry
 
-    logger.info("cli", "control", f"send_control {action} {label}", {"action": action, "label": label, "payload": payload})
+    logger.info(
+        "cli",
+        "control",
+        f"send_control {action} {label}",
+        {"action": action, "label": label, "payload": payload},
+    )
     entry = registry.resolve("vlc")
     if entry is not None:
         pid = entry["pid"]
         if ipc.send(entry, action, payload):
             print(f"{P}{label} (VLC PID: {pid}){R}")
-            logger.info("cli", "control_result", f"sent to vlc pid={pid}", {"target": "vlc", "pid": pid})
+            logger.info(
+                "cli",
+                "control_result",
+                f"sent to vlc pid={pid}",
+                {"target": "vlc", "pid": pid},
+            )
             return
         config.clear_pid_if(pid)
 
@@ -74,7 +85,12 @@ def _send_control(action, label, payload=None):
         command = ipc.WEB_COMMANDS.get(action, action)
         if _send_web_command(web["port"], command, payload):
             print(f"{P}{label} (web player){R}")
-            logger.info("cli", "control_result", f"sent to web port={web['port']}", {"target": "web", "port": web["port"]})
+            logger.info(
+                "cli",
+                "control_result",
+                f"sent to web port={web['port']}",
+                {"target": "web", "port": web["port"]},
+            )
             return
 
     print(f"{M}No VLC or web player running{R}")
@@ -146,17 +162,17 @@ def _bundle_root():
     return Path(__file__).resolve().parent.parent
 
 
-def _setup_island():
-    src = _bundle_root() / "backend" / "Hyprland" / "island.qml"
-    dest_dir = Path.home() / ".config" / "quickshell"
-    dest = dest_dir / "flow-island.qml"
-    if not src.exists():
-        print(f"{config.RED}island.qml not found in this installation ({src}){R}")
-        sys.exit(1)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
-    print(f"{P}Music island installed → {dest}{R}")
-    print(f"{M}Launch it with:{R} {S}quickshell -p {dest}{R}")
+# def _setup_island():
+#     src = _bundle_root() / "backend" / "Hyprland" / "island.qml"
+#     dest_dir = Path.home() / ".config" / "quickshell"
+#     dest = dest_dir / "flow-island.qml"
+#     if not src.exists():
+#         print(f"{config.RED}island.qml not found in this installation ({src}){R}")
+#         sys.exit(1)
+#     dest_dir.mkdir(parents=True, exist_ok=True)
+#     shutil.copy2(src, dest)
+#     print(f"{P}Music island installed → {dest}{R}")
+#     print(f"{M}Launch it with:{R} {S}quickshell -p {dest}{R}")
 
 
 def _resume(args):
@@ -511,6 +527,14 @@ def main():
         help="play statistics; add -l for the ranked per-song table, -c to clear all plays",
     )
     parser.add_argument(
+        "--meta",
+        nargs="?",
+        const=True,
+        metavar="force",
+        help="re-fetch metadata for every downloaded song (resumes after an IP block; "
+        "add 'force' to restart from the beginning)",
+    )
+    parser.add_argument(
         "--sort",
         choices=sorted(_SUMMARY_SORTS),
         metavar="KEY",
@@ -522,11 +546,11 @@ def main():
         metavar="N",
         help="rows to show in the --summary per-song table",
     )
-    parser.add_argument(
-        "--setup-island",
-        action="store_true",
-        help="install the Hyprland music island into ~/.config/quickshell",
-    )
+    # parser.add_argument(
+    #     "--setup-island",
+    #     action="store_true",
+    #     help="install the Hyprland music island into ~/.config/quickshell",
+    # )
     parser.add_argument(
         "command", nargs="?", default=None, help="subcommand (play, search, list, ...)"
     )
@@ -558,12 +582,14 @@ def main():
 
     args, unknown = parser.parse_known_args()
 
-    if getattr(args, "setup_island", False):
-        if not platform.is_linux():
-            print(f"{config.Muted}--setup-island is Linux-only (Hyprland) and is skipped here{R}")
-            sys.exit(0)
-        _setup_island()
-        sys.exit(0)
+    # if getattr(args, "setup_island", False):
+    #     if not platform.is_linux():
+    #         print(
+    #             f"{config.Muted}--setup-island is Linux-only (Hyprland) and is skipped here{R}"
+    #         )
+    #         sys.exit(0)
+    #     _setup_island()
+    #     sys.exit(0)
 
     if getattr(args, "config_get", None) is not None:
         val, ok = config.config_get(args.config_get)
@@ -625,6 +651,20 @@ def main():
         summary.cmd_summary(_summary_extra(args, unknown, command=None))
         sys.exit(0)
 
+    if getattr(args, "meta", None) is not None:
+        from backend import metadata
+
+        meta = args.meta
+        if meta is True:
+            force = False
+        elif str(meta).lower() == "force":
+            force = True
+        else:
+            print(f"{M}Usage: flow --meta [force]{R}")
+            sys.exit(2)
+        result = metadata.refetch_all(force=force)
+        sys.exit(1 if result.get("blocked") else 0)
+
     if getattr(args, "full", False):
         _full_view()
         sys.exit(0)
@@ -665,7 +705,10 @@ def main():
             if delta is not None:
                 from backend import registry
 
-                if registry.resolve("vlc") is not None or registry.resolve("tui") is not None:
+                if (
+                    registry.resolve("vlc") is not None
+                    or registry.resolve("tui") is not None
+                ):
                     config.write_seek(delta * 1000)
                 label = f"{label} {abs(delta)}s"
             _send_control(
@@ -706,6 +749,7 @@ def main():
         unknown = args.rd + unknown
     elif args.command and args.command not in (
         "play",
+        "random",
         "search",
         "savan",
         "svn",
@@ -775,6 +819,7 @@ def main():
 
         try:
             from backend import logger
+
             logger.log_command("cli", args.command, unknown, {"mode": config.Mode})
         except Exception:
             pass
@@ -785,7 +830,14 @@ def main():
         except Exception as e:
             try:
                 from backend import logger
-                logger.error("cli", "command_error", str(e), {"command": args.command}, exc_info=True)
+
+                logger.error(
+                    "cli",
+                    "command_error",
+                    str(e),
+                    {"command": args.command},
+                    exc_info=True,
+                )
             except Exception:
                 pass
             raise
@@ -801,6 +853,7 @@ def main():
                     raw_input = tui_input().strip()
                     try:
                         from backend import logger
+
                         logger.log_user_input("cli", raw_input)
                     except Exception:
                         pass
@@ -827,7 +880,10 @@ def main():
                         continue
                     try:
                         from backend import logger
-                        logger.log_command("cli", cmd, extra, {"mode": config.Mode, "shell": True})
+
+                        logger.log_command(
+                            "cli", cmd, extra, {"mode": config.Mode, "shell": True}
+                        )
                     except Exception:
                         pass
                     try:
@@ -837,7 +893,14 @@ def main():
                     except Exception as e:
                         try:
                             from backend import logger
-                            logger.error("cli", "command_error", str(e), {"command": cmd}, exc_info=True)
+
+                            logger.error(
+                                "cli",
+                                "command_error",
+                                str(e),
+                                {"command": cmd},
+                                exc_info=True,
+                            )
                         except Exception:
                             pass
                     if getattr(cmd_args, "bg", False):
@@ -845,7 +908,7 @@ def main():
                     if cmd == "switch":
                         commands = _load_commands()
                         show_banner()
-                except (EOFError, KeyboardInterrupt):
+                except EOFError, KeyboardInterrupt:
                     print(f"{M}\nGoodbye!{R}")
                     break
         finally:

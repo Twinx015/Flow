@@ -10,15 +10,22 @@ from . import out
 from .common import current, entry_url, library_rows, song_line
 
 
-def list_songs(query=None, limit=None, liked=None):
-    """List downloaded songs, ascending by name."""
+def list_songs(query=None, limit=None, liked=None, info=False):
+    """List downloaded songs, ascending by name; `info` adds paths and thumbnails."""
     rows = library_rows(query=query, liked=liked)
     total = len(rows)
     if limit:
         rows = rows[:limit]
+    if info:
+        lines = [
+            f"{index}. {row['title']} | {row['artist'] or '-'} | {row['path'] or '-'} | {row['thumbnail'] or '-'}"
+            for index, row in enumerate(rows, 1)
+        ]
+    else:
+        lines = [song_line(row) for row in rows]
     out.emit(
         {"songs": rows, "matched": total},
-        [song_line(row) for row in rows] or [f"no downloaded songs matching {query!r}" if query else "no downloaded songs"],
+        lines or [f"no downloaded songs matching {query!r}" if query else "no downloaded songs"],
     )
 
 

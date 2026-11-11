@@ -379,8 +379,24 @@ def download_url(url, outdir, fmt=None, progress=False):
     return filename
 
 
-def fetch_info(video_id: str):
-    """Full metadata for one video, or None. Used by the tag backfill scan."""
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "too many requests",
+    "not a bot",
+    "captcha",
+    "unusual traffic",
+    "request was blocked",
+)
+
+
+def is_rate_limited(exc) -> bool:
+    """Whether a fetch failure looks like YouTube blocking this IP."""
+    low = str(exc).lower()
+    return any(marker in low for marker in _RATE_LIMIT_MARKERS)
+
+
+def fetch_info(video_id: str, raise_errors: bool = False):
+    """Full metadata for one video, or None; `raise_errors` lets callers classify failure."""
     video_id = str(video_id or "").strip()
     if not video_id:
         return None
@@ -391,6 +407,8 @@ def fetch_info(video_id: str):
         return sponsor.stream_info(url, opts=ydl_opts_play, with_segments=False)
     except Exception as exc:
         logger.warning("Metadata fetch failed for %s: %s", video_id, exc)
+        if raise_errors:
+            raise
         return None
 
 
