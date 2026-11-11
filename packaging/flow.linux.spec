@@ -12,7 +12,6 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(_ROOT, "web/templates"), "web/templates"),
-        (os.path.join(_ROOT, "backend/Hyprland/island.qml"), "backend/Hyprland"),
         (os.path.join(_ROOT, "backend/plugin_api/flow_api.py"), "backend/plugin_api"),
         (os.path.join(_ROOT, "pyproject.toml"), "."),
     ],
