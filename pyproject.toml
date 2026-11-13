@@ -49,7 +49,6 @@ build-backend = "setuptools.build_meta"
 include = ["cli*", "backend*", "minimal*", "tui*", "web*"]
 
 [tool.setuptools.package-data]
-flow_twinx = ["Hyprland/*.qml"]
 web = ["templates/*"]
 cli = ["banners/*.txt"]
 

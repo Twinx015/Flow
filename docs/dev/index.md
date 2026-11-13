@@ -9,13 +9,13 @@ shell, a Textual TUI, a Flask web app, or a plain non-interactive CLI.
 
 Declared in `pyproject.toml` `[project.scripts]`:
 
-| Command | Function | What you get |
-| ------- | -------- | ------------ |
-| `flow` | `cli.main:main` | Interactive command shell (readline-style prompt) plus one-shot flags |
-| `flow-tui` | `tui:main` | Full-screen Textual UI |
-| `flow-web` | `web.main:main` | Daemonized Flask web server |
-| `flow-min` | `minimal.main:main` | Plain lines or JSON, no prompts, no spinner, playback detaches by default |
-| `flow daemon` | `backend/daemon.py` | Resident RPC host for plugins (`~/.flow/flow.sock`) |
+| Command       | Function            | What you get                                                              |
+| ------------- | ------------------- | ------------------------------------------------------------------------- |
+| `flow`        | `cli.main:main`     | Interactive command shell (readline-style prompt) plus one-shot flags     |
+| `flow-tui`    | `tui:main`          | Full-screen Textual UI                                                    |
+| `flow-web`    | `web.main:main`     | Daemonized Flask web server                                               |
+| `flow-min`    | `minimal.main:main` | Plain lines or JSON, no prompts, no spinner, playback detaches by default |
+| `flow daemon` | `backend/daemon.py` | Resident RPC host for plugins (`~/.flow/flow.sock`)                       |
 
 ## Package layout
 
@@ -46,7 +46,6 @@ backend/               # all logic
   plugin_api/          #   flow_api.py — self-contained v4 plugin client
   help_detail.py       #   `help -i` text
   metadata.py          #   resumable `flow --meta` library refresh
-  Hyprland/island.qml  #   optional quickshell widget (--setup-island)
   Online/              # online mode
     commands.py        #   command dispatch + COMMANDS dict
     player.py          #   streaming playback (VLC), display loop, signals
@@ -87,7 +86,7 @@ minimal/               # `flow-min` entry point
    `~/.flow/vlc.pid`, or POSTed to the web player's `/api/control` when the
    web server is running instead. Seek flags first write the delta (ms) to
    `~/.flow/seek.txt`.
-5. `--like`, `--unlike`, `--download` act on the *current* track by reading
+5. `--like`, `--unlike`, `--download` act on the _current_ track by reading
    `status.json` (`_act_current`), then dispatch into the right mode module.
 6. `--resume` replays the last track from `status.json`, picking the mode
    from the stored thumbnail (remote URL → online, cache/home path →
