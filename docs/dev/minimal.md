@@ -10,8 +10,9 @@ flow-min status                     one line of player state
 flow-min play "karan aujla 52 bars" search YouTube and play the top hit
 flow-min --json search "arijit singh"
 flow-min tags play workout -s       play every downloaded "workout" song, shuffled
+flow-min play-off "52 bars" -r 3    repeat a downloaded song three times
 flow-min ls -i                      title | artist | file path | thumbnail path
-flow-min --random 3                 play three random downloaded songs
+flow-min --random 3 -r              play three random downloaded songs, forever
 flow-min next                       skip, from any terminal
 ```
 
@@ -101,6 +102,16 @@ Two things are deliberate:
   silent no-op when stdin is not a TTY. It calls `youtube.search()` →
   `youtube.get_entry()` → `Online.player.play_entry()` instead.
 
+The child is a fork of a process that already imported the backend, so a C
+library that mutates process-global state at import can wedge VLC in the
+child. `backend/visualizer.py` therefore imports `sounddevice` (PortAudio)
+lazily, only when bars are actually drawn; importing it before the fork left
+the child in `Playing` at position 0 forever after the track ended, which is
+what kept `flow-min play-off` and its MPRIS name alive. On a finished track
+the display loop exits on `Ended`/`Error`/`Stopped`, the player publishes
+MPRIS `Stopped`, clears `status.json` (`playing: false`) and releases the
+bus name.
+
 `resume` resolves the exact video id from the `status.json` thumbnail
 (`_vid_from_thumb`) rather than re-searching by title.
 
@@ -138,6 +149,11 @@ and exit `1`; a number past the end reports the range the same way.
 `--random [N]` is the only flag that runs without a subcommand. It samples `N`
 downloaded songs (default 1) and plays them through the same queue path as
 `radio-off`; JSON output is the usual `{"status": "playing", ...}` payload.
+
+`play`, `play-off` and `--random` take `-r [N]` with the same semantics as the
+main CLI: no number (or `0`) repeats forever, `N > 0` repeats the queue `N`
+times. A single song is passed to the same backend `_play_queue` helper the
+tag and radio commands use, so `bg=False` and the fork stay consistent.
 
 Playlist subcommands: `show` (default), `create`, `add`, `play`, `remove`,
 `clear`, `delete`.

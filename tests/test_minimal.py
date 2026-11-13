@@ -578,6 +578,67 @@ def test_random_flag_defaults_to_one_song():
     assert parser.parse_args(["ls", "-i"]).info is True
 
 
+def test_repeat_flag_parses_for_playback_and_random():
+    parser = main.build_parser()
+    assert parser.parse_args(["play", "anthem", "-r"]).repeat == 0
+    assert parser.parse_args(["play", "anthem", "-r", "3"]).repeat == 3
+    assert parser.parse_args(["play-off", "anthem", "--repeat", "2"]).repeat == 2
+    assert parser.parse_args(["--random", "3", "-r"]).global_repeat == 0
+    assert parser.parse_args(["--random", "3", "-r", "4"]).global_repeat == 4
+
+
+def test_play_off_forwards_repeat_to_the_queue(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(core.lib, "find_songs", lambda query: ["/tmp/anthem.opus"])
+    monkeypatch.setattr(core, "_play_file", lambda path, **kw: seen.update(kw))
+    core.play_off("anthem", repeat=True, repeat_count=2)
+    assert seen["repeat"] is True
+    assert seen["repeat_count"] == 2
+
+
+def test_play_random_forwards_repeat(monkeypatch):
+    paths = [pathlib.Path(f"/tmp/rand{index}.opus") for index in range(3)]
+    seen = {}
+    monkeypatch.setattr(core.lib, "get_songs", lambda: paths)
+    monkeypatch.setattr(
+        core, "play_paths", lambda picks, **kw: seen.update(kw)
+    )
+    core.play_random(2, repeat=True, repeat_count=5)
+    assert seen["repeat"] is True
+    assert seen["repeat_count"] == 5
+
+
+def test_online_repeat_uses_the_backend_queue(monkeypatch, capfd):
+    seen = {}
+    monkeypatch.setattr(
+        core.on_commands,
+        "_play_queue",
+        lambda results, args: seen.update(results=results, args=args),
+    )
+    info = {"id": "minsrch000001", "duration": 10}
+    start()
+    core._play_online(info, "Repeat Anthem", foreground=True, repeat=True, repeat_count=3)
+    assert seen["args"].repeat is True
+    assert seen["args"].repeat_count == 3
+    assert seen["results"] == [(info, "Repeat Anthem", 10)]
+    assert "played  Repeat Anthem" in read(capfd)[0]
+
+
+def test_local_repeat_uses_the_backend_queue(monkeypatch, capfd):
+    seen = {}
+    monkeypatch.setattr(
+        core.off_commands,
+        "_play_queue",
+        lambda paths, args: seen.update(paths=paths, args=args),
+    )
+    monkeypatch.setattr(core.lib, "display_name", lambda path: "Repeat Anthem")
+    start()
+    core._play_file("/tmp/anthem.opus", foreground=True, repeat=True, repeat_count=2)
+    assert seen["args"].repeat is True
+    assert seen["args"].repeat_count == 2
+    assert [str(path) for path in seen["paths"]] == ["/tmp/anthem.opus"]
+
+
 def test_namespace_defaults_do_not_double_fork():
     """`minimal` forks itself, so the args it hands the backend must say bg=False."""
     from minimal.common import ns

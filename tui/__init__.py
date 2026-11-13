@@ -59,8 +59,12 @@ def main():
     )
     parser.add_argument(
         "--repeat",
-        action="store_true",
-        help="toggle repeat in a running Flow TUI; otherwise start the TUI with repeat enabled",
+        nargs="?",
+        const=0,
+        type=int,
+        metavar="N",
+        help="toggle repeat in a running Flow TUI; otherwise start the TUI with "
+        "repeat on (N times, empty or 0 = forever)",
     )
     parser.add_argument(
         "--shuffle",
@@ -88,7 +92,7 @@ def main():
         (args.pause, "pause", "Pause toggled", False),
         (args.next, "next", "Next", False),
         (args.previous, "prev", "Previous", False),
-        (args.repeat, "repeat", "Repeat toggled", True),
+        (args.repeat is not None, "repeat", "Repeat toggled", True),
         (args.shuffle, "shuffle", "Shuffle toggled", True),
     )
     active = [
@@ -116,7 +120,12 @@ def main():
 
     from .main import Flow
 
-    Flow(mode=None, repeat=args.repeat, shuffle=args.shuffle).run()
+    Flow(
+        mode=None,
+        repeat=args.repeat is not None,
+        shuffle=args.shuffle,
+        repeat_count=args.repeat or 0,
+    ).run()
 
 
 if __name__ == "__main__":

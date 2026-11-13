@@ -45,6 +45,16 @@ def build_parser():
         help="play N random downloaded songs (default 1)",
     )
     parser.add_argument(
+        "-r",
+        "--repeat",
+        dest="global_repeat",
+        nargs="?",
+        const=0,
+        type=int,
+        metavar="N",
+        help="with --random: repeat the queue (N times; empty or 0 = forever)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {backend_config.VERSION}",
@@ -62,12 +72,21 @@ def build_parser():
         if index:
             sub.add_argument("-i", "--index", type=int, default=1, help="which search result (default 1)")
         sub.add_argument("-s", "--shuffle", action="store_true", help="shuffle the queue")
+        sub.add_argument(
+            "-r",
+            "--repeat",
+            nargs="?",
+            const=0,
+            type=int,
+            metavar="N",
+            help="repeat the queue (N times; empty or 0 = forever)",
+        )
         sub.add_argument("--fg", action="store_true", help="stay in the foreground instead of detaching")
         return sub
 
     add("status", "what is playing right now").set_defaults(func=lambda a: core.status_cmd())
-    playback_flags(add("play", "search YouTube or play a link; a bare number plays that row of the last search")).set_defaults(func=lambda a: core.play(" ".join(a.query), index=a.index, shuffle=a.shuffle, foreground=a.fg))
-    playback_flags(add("play-off", "play a downloaded song"), index=False).set_defaults(func=lambda a: core.play_off(" ".join(a.query), shuffle=a.shuffle, foreground=a.fg))
+    playback_flags(add("play", "search YouTube or play a link; a bare number plays that row of the last search")).set_defaults(func=lambda a: core.play(" ".join(a.query), index=a.index, shuffle=a.shuffle, foreground=a.fg, repeat=a.repeat is not None, repeat_count=a.repeat or 0))
+    playback_flags(add("play-off", "play a downloaded song"), index=False).set_defaults(func=lambda a: core.play_off(" ".join(a.query), shuffle=a.shuffle, foreground=a.fg, repeat=a.repeat is not None, repeat_count=a.repeat or 0))
     resume = add("resume", "play the current or last track again")
     resume.add_argument("--fg", action="store_true", help="stay in the foreground instead of detaching")
     resume.set_defaults(func=lambda a: core.resume(foreground=a.fg))
@@ -194,7 +213,11 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.random is not None:
-        core.play_random(args.random)
+        core.play_random(
+            args.random,
+            repeat=args.global_repeat is not None,
+            repeat_count=args.global_repeat or 0,
+        )
         return 0
     if not getattr(args, "func", None):
         parser.print_help()

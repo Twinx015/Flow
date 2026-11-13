@@ -29,6 +29,7 @@ The screen has two panels:
 | `space` | Play / pause |
 | `n` / `p` | Next / previous track |
 | `s` / `r` | Toggle shuffle / repeat |
+| `Ctrl+R` | Set a finite repeat count (empty or `0` = forever) |
 | `S` | Focus the search box (both modes) |
 | `d` | Download the highlighted or current track (online mode only) |
 | `R` | Rename the highlighted or current track (offline mode only) |
@@ -56,7 +57,7 @@ The TUI is fully wired into Flow's control system:
 | `--pause` | Toggle play/pause in a running Flow session (TUI or background VLC) |
 | `--next` | Skip to the next track |
 | `--previous` | Go back to the previous track |
-| `--repeat` | Toggle repeat in a running TUI, or start the TUI with repeat on |
+| `--repeat [N]` | Toggle repeat in a running TUI, or start the TUI repeating (`N` times; empty or `0` = forever) |
 | `--shuffle` | Toggle shuffle in a running TUI, or start the TUI with shuffle on |
 
 ## Web GUI (`flow-web`)

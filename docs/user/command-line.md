@@ -337,9 +337,11 @@ flow-min search "arijit singh"      list the results as 1..N
 flow-min play 2                     play row 2 of that search
 flow-min --json search "arijit singh" | jq '.[0].video_id'
 flow-min tags play workout -s       play every downloaded "workout" song, shuffled
+flow-min play-off "52 bars" -r 3    repeat a downloaded song three times
 flow-min ls -i                      title | artist | file path | thumbnail path
 flow-min --random                   play one random downloaded song
 flow-min --random 5                 play five random downloaded songs
+flow-min --random 5 -r              ...and repeat that queue forever
 flow-min next                       skip, from any terminal
 ```
 
@@ -358,6 +360,8 @@ $ flow-min ls -i
 ```
 
 `--random [N]` plays `N` random downloaded songs (one when `N` is omitted).
+`play`, `play-off` and `--random` accept `-r [N]`: a bare `-r` (or `-r 0`)
+repeats forever, while `-r 3` plays the queue three times.
 
 The commands are the part of the table above that never needs a conversation:
 `status`, `play`, `play-off`, `random`, `resume`, `search`, `stop`, `pause`,

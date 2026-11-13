@@ -74,9 +74,11 @@ Tracks are `Track` dataclasses (`title`, `ref`, `kind`,
 - Durations for local tracks are probed in a background thread using
   `vlc.Media.parse`/`parse_with_options`.
 - `_on_tick` polls VLC every second: position/total drive the progress bar
-  and MPRIS position; reaching the end advances (`_advance`) unless repeat
-  is on (VLC is seeked to 0); VLC `Error` state triggers `_recover_playback`
-  (fresh media retry, then simulated mode).
+  and MPRIS position. Reaching the end (or VLC's `Ended` state) calls
+  `_track_finished()`: repeat replays the track, otherwise `_advance()` moves
+  on. A finite repeat count decrements once per play; `Ctrl+R` sets it. VLC
+  `Error` state triggers `_recover_playback` (fresh media retry, then
+  simulated mode).
 
 ### Sharing state
 

@@ -27,6 +27,11 @@ try:
 except ImportError:
     curses = None
 
+# VLC can finish in `Stopped` as well as `Ended`/`Error` (audio output torn
+# down). All three are terminal; missing one leaves the loop spinning forever
+# and the MPRIS bus name held after the song is over.
+_DONE_STATES = (vlc.State.Ended, vlc.State.Error, vlc.State.Stopped)
+
 _truncate_title = config._truncate_title
 
 P = config.Primary
@@ -253,7 +258,7 @@ def _display_loop(
         display = "none"
     if display == "none":
         paused_printed = False
-        while player.get_state() not in (vlc.State.Ended, vlc.State.Error):
+        while player.get_state() not in _DONE_STATES:
             if stop_check and stop_check():
                 break
             if _stop_req or _next_req:
@@ -303,7 +308,7 @@ def _display_loop(
         )
         rich_disp.start()
     try:
-        while player.get_state() not in (vlc.State.Ended, vlc.State.Error):
+        while player.get_state() not in _DONE_STATES:
             if stop_check and stop_check():
                 break
             if _stop_req or _next_req:
@@ -519,6 +524,7 @@ def play_file(filepath, title, args=None, flags=None, next_title=None, nav=None)
             _restore_pause_input()
     finally:
         _restore_pause_input()
+        mpris.set_status(mpris.STOPPED)
         _teardown()
         os.dup2(old_stderr, 2)
         os.close(old_stderr)

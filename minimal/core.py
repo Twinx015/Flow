@@ -162,7 +162,7 @@ def _load_search():
     return rows
 
 
-def _play_saved(index, shuffle=False, foreground=False):
+def _play_saved(index, shuffle=False, foreground=False, repeat=False, repeat_count=0):
     """Play row `index` (1-based) of the last `search`."""
     rows = _load_search()
     if not 1 <= index <= len(rows):
@@ -172,13 +172,26 @@ def _play_saved(index, shuffle=False, foreground=False):
         info = youtube.get_entry(row.get("url") or "")
     if not info:
         out.fail(f"could not resolve a stream for {row.get('title')!r}")
-    _play_online(info, row.get("title") or "", shuffle=shuffle, foreground=foreground)
+    _play_online(
+        info,
+        row.get("title") or "",
+        shuffle=shuffle,
+        foreground=foreground,
+        repeat=repeat,
+        repeat_count=repeat_count,
+    )
 
 
-def play(query, index=1, shuffle=False, foreground=False):
+def play(query, index=1, shuffle=False, foreground=False, repeat=False, repeat_count=0):
     """Play a YouTube search result or direct link; a bare number picks a saved row."""
     if query.strip().isdigit():
-        _play_saved(int(query), shuffle=shuffle, foreground=foreground)
+        _play_saved(
+            int(query),
+            shuffle=shuffle,
+            foreground=foreground,
+            repeat=repeat,
+            repeat_count=repeat_count,
+        )
         return
     video_id = youtube.video_id_from_url(query)
     if video_id:
@@ -188,7 +201,14 @@ def play(query, index=1, shuffle=False, foreground=False):
         if not info:
             out.fail(f"could not resolve a stream for {query!r}")
         title = info.get("title") or ""
-        _play_online(info, title, shuffle=shuffle, foreground=foreground)
+        _play_online(
+            info,
+            title,
+            shuffle=shuffle,
+            foreground=foreground,
+            repeat=repeat,
+            repeat_count=repeat_count,
+        )
         return
     with out.quiet():
         results = youtube.search(query, config.MAX_SEARCH_RESULTS)
@@ -201,19 +221,33 @@ def play(query, index=1, shuffle=False, foreground=False):
         info = youtube.get_entry(entry_url(entry))
     if not info:
         out.fail(f"could not resolve a stream for {title!r}")
-    _play_online(info, title, shuffle=shuffle, foreground=foreground)
+    _play_online(
+        info,
+        title,
+        shuffle=shuffle,
+        foreground=foreground,
+        repeat=repeat,
+        repeat_count=repeat_count,
+    )
 
 
-def play_off(query, shuffle=False, foreground=False):
+def play_off(query, shuffle=False, foreground=False, repeat=False, repeat_count=0):
     """Play a downloaded song by name."""
     with out.quiet():
         matches = lib.find_songs(query)
     if not matches:
         out.fail(f"no downloaded song matching {query!r}")
-    _play_file(matches[0], shuffle=shuffle, foreground=foreground, matches=len(matches))
+    _play_file(
+        matches[0],
+        shuffle=shuffle,
+        foreground=foreground,
+        matches=len(matches),
+        repeat=repeat,
+        repeat_count=repeat_count,
+    )
 
 
-def play_random(count=1, foreground=False):
+def play_random(count=1, foreground=False, repeat=False, repeat_count=0):
     """Play one or more random downloaded songs."""
     with out.quiet():
         songs = lib.get_songs()
@@ -230,6 +264,8 @@ def play_random(count=1, foreground=False):
         picks,
         foreground=foreground,
         label=f"playing  {len(picks)} random track(s)",
+        repeat=repeat,
+        repeat_count=repeat_count,
     )
 
 
@@ -301,7 +337,9 @@ def resume(foreground=False):
     _play_file(pathlib.Path(path), foreground=foreground)
 
 
-def _play_online(info, title, shuffle=False, foreground=False):
+def _play_online(
+    info, title, shuffle=False, foreground=False, repeat=False, repeat_count=0
+):
     payload = {
         "status": "playing",
         "title": title,
@@ -309,21 +347,27 @@ def _play_online(info, title, shuffle=False, foreground=False):
         "artist": info.get("artist") or info.get("channel") or "",
         "duration": int(info.get("duration") or 0),
     }
-    args = ns(shuffle=shuffle, bg=False)
+    args = ns(
+        shuffle=shuffle, bg=False, repeat=repeat, repeat_count=repeat_count
+    )
+    if repeat:
+        results = [(info, title, payload["duration"])]
+        run = lambda: on_commands._play_queue(results, args)
+        setup = on_player._install_controls
+    else:
+        run = lambda: on_player.play_entry(info, title, args)
+        setup = on_player._install_controls
     if foreground:
         with out.quiet():
-            on_player.play_entry(info, title, args)
+            run()
         out.emit(payload, f"played  {title}")
         return
-    _spawn(
-        on_player._install_controls,
-        lambda: on_player.play_entry(info, title, args),
-        payload,
-        f"playing  {title}",
-    )
+    _spawn(setup, run, payload, f"playing  {title}")
 
 
-def _play_file(path, shuffle=False, foreground=False, matches=1):
+def _play_file(
+    path, shuffle=False, foreground=False, matches=1, repeat=False, repeat_count=0
+):
     path = pathlib.Path(path)
     title = lib.display_name(path)
     payload = {
@@ -332,15 +376,21 @@ def _play_file(path, shuffle=False, foreground=False, matches=1):
         "path": str(path),
         "matches": matches,
     }
-    args = ns(shuffle=shuffle, bg=False)
+    args = ns(
+        shuffle=shuffle, bg=False, repeat=repeat, repeat_count=repeat_count
+    )
+    if repeat:
+        run = lambda: off_commands._play_queue([path], args)
+    else:
+        run = lambda: off_player.play_file(path, title, args)
     if foreground:
         with out.quiet():
-            off_player.play_file(path, title, args)
+            run()
         out.emit(payload, f"played  {title}")
         return
     _spawn(
         off_player._install_controls,
-        lambda: off_player.play_file(path, title, args),
+        run,
         payload,
         f"playing  {title}",
     )

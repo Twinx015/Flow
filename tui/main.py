@@ -114,6 +114,7 @@ class NowPlaying(Static):
     playing: reactive[bool] = reactive(False)
     shuffle: reactive[bool] = reactive(False)
     repeat: reactive[bool] = reactive(False)
+    repeat_left: reactive[int] = reactive(0)
     volume: reactive[int] = reactive(80)
 
     def __init__(self, track: Track) -> None:
@@ -140,7 +141,10 @@ class NowPlaying(Static):
     def _status_line(self) -> str:
         flags = []
         flags.append("shuffle: on" if self.shuffle else "shuffle: off")
-        flags.append("repeat: on" if self.repeat else "repeat: off")
+        if self.repeat and self.repeat_left:
+            flags.append(f"repeat: on (x{self.repeat_left})")
+        else:
+            flags.append("repeat: on" if self.repeat else "repeat: off")
         flags.append(f"vol: {self.volume}%")
         return "  |  ".join(flags)
 
@@ -254,6 +258,65 @@ class RenamePrompt(ModalScreen[str | None]):
         return self.query_one("#rename-input", Input).value.strip() or None
 
 
+class RepeatPrompt(ModalScreen[str | None]):
+    CSS = """
+    RepeatPrompt {
+        align: center middle;
+    }
+
+    #repeat-box {
+        width: 60;
+        height: auto;
+        background: $surface;
+        border: round $accent;
+        padding: 1 2;
+    }
+
+    #repeat-buttons {
+        height: auto;
+        align: right middle;
+    }
+
+    #repeat-buttons Button {
+        margin-left: 6;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", priority=True)]
+
+    def __init__(self, current: int) -> None:
+        super().__init__()
+        self._current = str(current or "")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="repeat-box"):
+            yield Label("Repeat track (empty or 0 = forever)", classes="rename-heading")
+            yield Input(value=self._current, id="repeat-input")
+            with Horizontal(id="repeat-buttons"):
+                yield Button("Cancel", id="repeat-cancel")
+                yield Button("Save", id="repeat-save", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#repeat-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.dismiss(self._value())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "repeat-save":
+            self.dismiss(self._value())
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _value(self) -> str | None:
+        value = self.query_one("#repeat-input", Input).value.strip()
+        return value or "0"
+
+
 class Flow(App):
     CSS = """
     Screen {
@@ -345,6 +408,7 @@ class Flow(App):
         ("s", "toggle_shuffle", "Shuffle"),
         ("S", "search", "Search"),
         ("r", "toggle_repeat", "Repeat"),
+        ("ctrl+r", "repeat_count", "Repeat N"),
         ("d", "download", "Download"),
         ("R", "rename_track", "Rename"),
         ("+", "volume_up", "Vol +"),
@@ -355,7 +419,11 @@ class Flow(App):
     ]
 
     def __init__(
-        self, mode: str | None = None, repeat: bool = False, shuffle: bool = False
+        self,
+        mode: str | None = None,
+        repeat: bool = False,
+        shuffle: bool = False,
+        repeat_count: int = 0,
     ) -> None:
         super().__init__()
         self.mode = mode or "Offline"
@@ -375,6 +443,8 @@ class Flow(App):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._shuffle = shuffle
         self._repeat = repeat
+        self._repeat_total = max(0, int(repeat_count or 0))
+        self._repeat_left = self._repeat_total
         self._offline_full: list[Track] = []
         self._search_seq = 0  # bumps per query; discards stale search results
         self._probing = False  # one duration-probe pass at a time
@@ -415,6 +485,7 @@ class Flow(App):
         np = self.now_playing
         if self._repeat:
             np.repeat = True
+            np.repeat_left = self._repeat_left
         if self._shuffle:
             np.shuffle = True
         if self._repeat or self._shuffle:
@@ -805,7 +876,36 @@ class Flow(App):
     def action_toggle_repeat(self) -> None:
         np = self.now_playing
         np.repeat = not np.repeat
+        self._repeat_total = 0
+        self._repeat_left = 0
+        np.repeat_left = 0
         np.refresh_status()
+
+    def action_repeat_count(self) -> None:
+        """Ask for a finite repeat count; empty or 0 repeats forever."""
+        self.push_screen(
+            RepeatPrompt(self._repeat_total), self._apply_repeat_count
+        )
+
+    def _apply_repeat_count(self, raw: str | None) -> None:
+        if raw is None:
+            return
+        try:
+            count = int(raw)
+        except (TypeError, ValueError):
+            self._status("Repeat count must be a number")
+            return
+        if count < 0:
+            self._status("Repeat count must be 0 or more")
+            return
+        np = self.now_playing
+        self._repeat_total = count
+        self._repeat_left = count
+        np.repeat = True
+        np.repeat_left = count
+        np.refresh_status()
+        label = "forever" if count == 0 else f"{count} time(s)"
+        self._status(f"Repeat: {label}")
 
     def action_volume_up(self) -> None:
         np = self.now_playing
@@ -935,9 +1035,13 @@ class Flow(App):
         )
         mpris.set_status(mpris.PLAYING)
 
-    def _play(self, track: Track) -> None:
+    def _play(self, track: Track, reset_repeat: bool = True) -> None:
         """Select a track and begin playback (VLC or simulated fallback)."""
         np = self.now_playing
+        if reset_repeat:
+            self._repeat_left = self._repeat_total
+            np.repeat_left = self._repeat_left
+            np.refresh_status()
         self._current = track
         np.set_track(track)
         self._reset_media()
@@ -1049,8 +1153,12 @@ class Flow(App):
             and self.is_playing
         ):
             try:
-                if self._vlc_player.get_state() == self._vlc_state.Error:
+                state = self._vlc_player.get_state()
+                if state == self._vlc_state.Error:
                     self._recover_playback()
+                    return
+                if state == self._vlc_state.Ended:
+                    self._track_finished()
                     return
                 ms = self._vlc_player.get_time()
                 if ms and ms >= 0:
@@ -1069,14 +1177,7 @@ class Flow(App):
                             self._current.duration = total
                             self._update_status(self.is_playing)
                     if np.position >= total:
-                        if np.repeat:
-                            try:
-                                self._vlc_player.set_time(0)
-                            except Exception:
-                                pass
-                            np.position = 0
-                        else:
-                            self._advance(1)
+                        self._track_finished()
             except Exception:
                 pass
             return
@@ -1089,13 +1190,33 @@ class Flow(App):
             return
         finished = np.tick(1)
         if finished:
-            if np.repeat:
-                np.position = 0
-                np.query_one("#np-progress", ProgressBar).progress = 0
-            else:
-                self._advance(1)
+            self._track_finished()
         else:
             mpris.set_position(np.position * 1_000_000)
+
+    def _track_finished(self) -> None:
+        """Repeat the current track, or advance to the next one."""
+        if self._current is None:
+            return
+        np = self.now_playing
+        if not np.repeat:
+            self._advance(1)
+            return
+        if self._repeat_total > 0:
+            if self._repeat_left > 1:
+                self._repeat_left -= 1
+                np.repeat_left = self._repeat_left
+                np.refresh_status()
+                self._play(self._current, reset_repeat=False)
+            else:
+                self._repeat_total = 0
+                self._repeat_left = 0
+                np.repeat = False
+                np.repeat_left = 0
+                np.refresh_status()
+                self._advance(1)
+            return
+        self._play(self._current, reset_repeat=False)
 
     def _recover_playback(self) -> None:
         if not self.is_playing or self._current is None:

@@ -4,7 +4,6 @@ import subprocess
 import threading
 
 import numpy as np
-import sounddevice as sd
 from backend import config
 
 try:
@@ -125,6 +124,8 @@ def _find_monitor():
 
     # Fallback: any sounddevice device named like a monitor.
     try:
+        import sounddevice as sd
+
         devices = sd.query_devices()
     except Exception:
         return None
@@ -214,6 +215,7 @@ def start(stdscr, ansi_color):
         return False
     if _stream is not None:
         return
+    import sounddevice as sd
     _stdscr = stdscr
     curses.start_color()
     curses.use_default_colors()
