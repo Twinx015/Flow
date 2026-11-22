@@ -151,11 +151,18 @@ download the matching index can be used the same way.
 `summary` reports what you've been playing. The stats card splits the
 numbers — **combined** plays (both modes, from `~/.flow/library.db`),
 **online** plays (`~/.flow/history.db`) and **offline** (the difference) —
-then lists your top artist and top song, and charts the last
-7 days: one bar per calendar day with online (`█`) and offline (`░`)
-stacked, ending in `online/offline` counts, plus a progress bar comparing
+reports hours played **today**, **this week** and **all time**, then lists
+your top artist and top song, the five songs with the most hours played, and
+charts the last 7 days: one bar per calendar day with online (`█`) and offline
+(`░`) stacked, ending in `online/offline` counts, plus a progress bar comparing
 **this week vs last week**. Days run midnight to midnight, so `today` and the
 card's `played today` always mean *since midnight*.
+
+Hours today and this week come from per-day time buckets in `library.db`,
+filled on every play. Days played before that bucket existed have no stored
+time and are estimated from the library's average track length, marked with
+`~`. All-time hours are the sum of each song's play count × its duration, and
+songs with no known duration show `unknown` in the top-songs card.
 
 ```bash
 flow summary                          # stats card + a 7-day online/offline chart

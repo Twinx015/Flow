@@ -23,24 +23,27 @@ def seeded(capsys):
     the seed plays half of its events offline to keep the two apart.
     """
     history.clear()
+    library.clear_plays()
     library.mark_unliked("sum-test-1")
     library.mark_unliked("sum-test-2")
     library.mark_unliked("sum-test-3")
     # 4x Around the World (2 online), 2x Teardrop (2 online), 1x Midnight City.
+    # Durations make the summary's hours cards deterministic: 20m + 8m + 3m.
     plays = [
-        ("sum-test-1", "Around the World", "Daft Punk", "online"),
-        ("sum-test-1", "Around the World", "Daft Punk", "offline"),
-        ("sum-test-1", "Around the World", "Daft Punk", "online"),
-        ("sum-test-1", "Around the World", "Daft Punk", "offline"),
-        ("sum-test-2", "Teardrop", "Massive Attack", "online"),
-        ("sum-test-2", "Teardrop", "Massive Attack", "online"),
-        ("sum-test-3", "Midnight City", "M83", "offline"),
+        ("sum-test-1", "Around the World", "Daft Punk", "online", 300),
+        ("sum-test-1", "Around the World", "Daft Punk", "offline", 300),
+        ("sum-test-1", "Around the World", "Daft Punk", "online", 300),
+        ("sum-test-1", "Around the World", "Daft Punk", "offline", 300),
+        ("sum-test-2", "Teardrop", "Massive Attack", "online", 240),
+        ("sum-test-2", "Teardrop", "Massive Attack", "online", 240),
+        ("sum-test-3", "Midnight City", "M83", "offline", 180),
     ]
-    for video_id, title, artist, mode in plays:
-        history.record_play(video_id, title, artist, mode=mode)
+    for video_id, title, artist, mode, duration in plays:
+        history.record_play(video_id, title, artist, mode=mode, duration=duration)
     yield
     for video_id in ("sum-test-1", "sum-test-2", "sum-test-3"):
         library._mutate(lambda data, v=video_id: data.pop(v, None) or True)
+    library.clear_plays()
     history.clear()
 
 
@@ -170,6 +173,81 @@ def test_stats_card_lists_the_top_song(capsys):
     out = run(capsys, [])
     assert "top song" in out
     assert "Around the World (4 plays)" in out
+
+
+def test_stats_card_reports_hours_today_week_and_all_time(capsys):
+    out = run(capsys, [])
+    # 4x300s + 2x240s + 180s = 31 minutes, all seeded "today".
+    assert re.search(r"hours today\s+31m", out)
+    assert re.search(r"hours this week\s+31m", out)
+    assert re.search(r"hours all time\s+31m", out)
+
+
+def test_stats_card_lists_top_songs_with_hours(capsys):
+    out = run(capsys, [])
+    assert "Top songs" in out
+    assert re.search(r"1\. Around the World\s+20m · 4 plays", out)
+    assert re.search(r"2\. Teardrop\s+8m · 2 plays", out)
+    assert re.search(r"3\. Midnight City\s+3m · 1 play", out)
+
+
+def test_top_songs_caps_at_five_and_ranks_by_hours():
+    rows = [
+        {
+            "title": f"Song {i}",
+            "song_count": 100 - i,
+            "duration": 60 * (i + 1),
+            "last_played": 0,
+        }
+        for i in range(7)
+    ]
+    top = summary._top_songs(rows)
+    assert len(top) == 5
+    # Hours dominate the ranking even though Song 0 has the most plays.
+    assert top[0]["title"] == "Song 6"
+
+
+@pytest.mark.parametrize(
+    "seconds,expected",
+    [
+        (0, "0m"),
+        (59, "0m"),
+        (60, "1m"),
+        (3599, "59m"),
+        (3600, "1h 00m"),
+        (3661, "1h 01m"),
+        (90000, "25h 00m"),
+    ],
+)
+def test_fmt_hours(seconds, expected):
+    assert summary._fmt_hours(seconds) == expected
+
+
+def test_hours_falls_back_to_the_average_track_length(monkeypatch):
+    rows = [{"song_count": 4, "duration": 300, "last_played": 0}]
+    counts = [(offset, 4 if offset == 0 else 0) for offset in range(6, -1, -1)]
+    tracked = [(offset, 0) for offset in range(6, -1, -1)]
+    monkeypatch.setattr(library, "play_days", lambda days=7: counts)
+    monkeypatch.setattr(library, "play_seconds", lambda days=7: tracked)
+
+    today, today_est, week, week_est = summary._hours(rows)
+
+    assert today == 1200 and today_est is True
+    assert week == 1200 and week_est is True
+    assert summary._fmt_hours(today) == "20m"
+
+
+def test_hours_prefers_tracked_seconds(monkeypatch):
+    rows = [{"song_count": 4, "duration": 300, "last_played": 0}]
+    counts = [(offset, 4 if offset == 0 else 0) for offset in range(6, -1, -1)]
+    tracked = [(offset, 120 if offset == 0 else 0) for offset in range(6, -1, -1)]
+    monkeypatch.setattr(library, "play_days", lambda days=7: counts)
+    monkeypatch.setattr(library, "play_seconds", lambda days=7: tracked)
+
+    today, today_est, week, week_est = summary._hours(rows)
+
+    assert (today, today_est) == (120, False)
+    assert (week, week_est) == (120, False)
 
 
 def test_chart_stacks_online_and_offline_for_today(capsys):

@@ -107,8 +107,9 @@ The web UI can:
 - **Download** tracks (also in opus/m4a/mp3/webm when ffmpeg is present).
 - **Auto-skip SponsorBlock segments** while playing (toggleable via
   `ad_skip`).
-- **Remember favorites** as speed-dials on the home screen, and set a default
-  download format in Settings.
+- **Remember favorites** as speed-dials on the home screen, and configure
+  Settings (download format, theme presets, custom colors, or thumbnail-accent
+  theme with backend-extracted accent color).
 
 Control from the CLI works against the web player too: `flow --pause`,
 `flow --next`, `flow --seek 30`, and `flow --status` reach a running web

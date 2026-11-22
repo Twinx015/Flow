@@ -28,7 +28,7 @@ backend/               # all logic
   status.py            #   ~/.flow/status.json + status card printer
   library.py           #   ~/.flow/library.db (likes, downloads, metadata, plays)
   history.py           #   ~/.flow/history.db (online-only play log)
-  summary.py           #   `summary` command — stats card + ranked per-song table
+  summary.py           #   `summary` command — hours card, top songs, ranked table
   playlist.py          #   per-playlist JSON store + ops
   plist_cli.py         #   playlist command-line parsing
   control.py           #   ~/.flow/web_command.json (web player control)

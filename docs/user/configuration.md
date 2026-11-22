@@ -116,7 +116,7 @@ Everything lives under `~/.flow/`.
 | `vlc.pid`, `tui.pid`, `web.pid`, `web_port` | Legacy pid/port mirrors of `players.json` (kept for compat)        |
 | `seek.txt`                                  | Pending seek delta (milliseconds) for `--seek`/`--seekb`           |
 | `web_command.json`                          | Pending control command for the web player                         |
-| `web_ui.json`                               | Web UI settings (e.g. chosen download format)                      |
+| `web_ui.json`                               | Web UI settings (download format, theme, custom/thumbnail theme colors) |
 | `library.json.bak`                          | Pre-0.9 store, kept as a backup after the one-time import          |
 
 ### library.db
@@ -140,10 +140,12 @@ removed it from Speed Dial **and** never played it — so `song_count` survives
 an unlike.
 
 Alongside the songs, `library.db` keeps `play_days`: one bucket per calendar
-day counting **both** modes. `bump_play` moves it in the same transaction as
-`song_count`, and `flow summary` reads it to chart offline plays per day —
-`history.db` only timestamps streams. Buckets start at the first play after
-this shipped; there is no backfill.
+day counting **both** modes, plus the total seconds played that day.
+`bump_play` moves it in the same transaction as `song_count`, and
+`flow summary` reads it to chart offline plays per day and report hours
+today / this week — `history.db` only timestamps streams. Buckets start at
+the first play after this shipped; there is no backfill, so days without
+stored seconds are estimated from the average track length.
 
 ### history.db
 

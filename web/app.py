@@ -73,7 +73,8 @@ SETTINGS_FILE = pathlib.Path.home() / ".flow/web_ui.json"
 FLOW_DIR = pathlib.Path.home() / ".flow/downloads"
 MUSIC_DIR = pathlib.Path.home() / ".flow/music"
 
-_truncate_title = config._truncate_title
+def _truncate_title(title):
+    return config.clean_title(title)
 
 AUDIO_EXTENSIONS = {
     ".mp3",
@@ -230,8 +231,19 @@ def _resolve_thumbnail(thumb: str) -> str:
         stem = thumb[len("/thumb/") :].split("?")[0].split("/")[0]
         path = library.thumbnail_path(stem)
         if pathlib.Path(path).exists():
-            return path
+            return f"/thumb/{stem}"
         return ""
+    if thumb.startswith("http://") or thumb.startswith("https://"):
+        return thumb
+    p = pathlib.Path(thumb).expanduser()
+    if p.is_absolute():
+        try:
+            resolved = p.resolve()
+            cache = pathlib.Path(library.THUMB_CACHE).resolve()
+            if resolved.is_relative_to(cache) and resolved.exists():
+                return f"/thumb/{resolved.stem}"
+        except OSError:
+            pass
     return thumb
 
 
@@ -1452,12 +1464,143 @@ def api_is_liked():
     )
 
 
+_THUMB_COLOR_CACHE: dict[str, str] = {}
+
+
+def _extract_color_pillow(data: bytes) -> str | None:
+    try:
+        from PIL import Image
+        import io
+
+        with Image.open(io.BytesIO(data)) as img:
+            img = img.convert("RGB").resize((32, 32))
+            pixels = list(img.getdata())
+        best = None
+        best_score = -1.0
+        for r, g, b in pixels:
+            mx, mn = max(r, g, b), min(r, g, b)
+            l = (mx + mn) / 510
+            sat = 0 if mx == mn else (mx - mn) / (255 - abs(2 * l * 255 - 255))
+            if l < 0.2 or l > 0.85:
+                continue
+            score = sat * 0.75 + (1 - abs(l - 0.5)) * 0.25
+            if score > best_score:
+                best_score = score
+                best = (r, g, b)
+        if best is None:
+            r = sum(p[0] for p in pixels) // len(pixels)
+            g = sum(p[1] for p in pixels) // len(pixels)
+            b = sum(p[2] for p in pixels) // len(pixels)
+            best = (r, g, b)
+        return "#{:02x}{:02x}{:02x}".format(*best)
+    except Exception:
+        return None
+
+
+def _extract_color_fallback(data: bytes) -> str | None:
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-vf",
+                "scale=1:1",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ],
+            input=data,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if proc.returncode == 0 and len(proc.stdout) >= 3:
+            r, g, b = proc.stdout[0], proc.stdout[1], proc.stdout[2]
+            return "#{:02x}{:02x}{:02x}".format(r, g, b)
+    except Exception:
+        pass
+    return None
+
+
+def _extract_thumbnail_color(data: bytes) -> str | None:
+    color = _extract_color_pillow(data)
+    if color:
+        return color
+    return _extract_color_fallback(data)
+
+
+def _read_thumbnail_bytes(video_id: str = "", url: str = "") -> bytes | None:
+    if video_id:
+        path = pathlib.Path(library.thumbnail_path(video_id))
+        if path.exists():
+            try:
+                return path.read_bytes()
+            except Exception:
+                pass
+    if url:
+        if url.startswith("/thumb/"):
+            stem = url[len("/thumb/") :].split("?")[0].split("/")[0]
+            path = pathlib.Path(library.thumbnail_path(stem))
+            if path.exists():
+                try:
+                    return path.read_bytes()
+                except Exception:
+                    pass
+        if url.startswith("http://") or url.startswith("https://"):
+            try:
+                import urllib.request
+
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return resp.read()
+            except Exception:
+                pass
+    if video_id:
+        for u in [
+            f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+        ]:
+            try:
+                import urllib.request
+
+                req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return resp.read()
+            except Exception:
+                pass
+    return None
+
+
 @app.route("/thumb/<video_id>")
 def serve_thumb(video_id):
     path = pathlib.Path(library.thumbnail_path(video_id))
     if not path.exists():
         return jsonify({"error": "thumbnail not found"}), 404
     return send_file(str(path), mimetype="image/jpeg", conditional=True)
+
+
+@app.route("/api/thumbnail-color")
+def api_thumbnail_color():
+    video_id = str(request.args.get("video_id") or "").strip()
+    url = str(request.args.get("url") or "").strip()
+    key = video_id or url
+    if not key:
+        return jsonify({"color": None})
+    if key in _THUMB_COLOR_CACHE:
+        return jsonify({"color": _THUMB_COLOR_CACHE[key]})
+    data = _read_thumbnail_bytes(video_id=video_id, url=url)
+    color = _extract_thumbnail_color(data) if data else None
+    if color:
+        _THUMB_COLOR_CACHE[key] = color
+    return jsonify({"color": color})
 
 
 @app.route("/api/settings", methods=["GET", "POST"])

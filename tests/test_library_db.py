@@ -16,6 +16,7 @@ their paths at import time, so every test uses video ids unique to itself.
 """
 
 import json
+import sqlite3
 import time
 
 import pytest
@@ -334,12 +335,27 @@ def test_clear_plays_zeroes_counts_but_keeps_the_row(song):
 
 def test_play_days_counts_a_play_and_clear_drops_the_bucket(song):
     before = dict(library.play_days(7))[0]
+    before_seconds = dict(library.play_seconds(7))[0]
     library.bump_play(song, SONG_TITLE, ARTIST, 120)
     assert dict(library.play_days(7))[0] == before + 1
+    assert dict(library.play_seconds(7))[0] == before_seconds + 120
 
     library.clear_plays()
 
     assert all(count == 0 for _, count in library.play_days(7))
+    assert all(seconds == 0 for _, seconds in library.play_seconds(7))
+
+
+def test_ensure_schema_adds_seconds_to_an_old_play_days_table():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE play_days (day TEXT PRIMARY KEY, plays INTEGER NOT NULL DEFAULT 0)"
+    )
+    library._ensure_schema(conn)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(play_days)")}
+    assert "seconds" in cols
+    conn.close()
 
 
 # ---------------------------------------------------------------------------

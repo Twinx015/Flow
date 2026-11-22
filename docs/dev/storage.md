@@ -23,7 +23,7 @@ crash mid-write can never truncate them. The two databases
 ├── web.pid                # legacy mirror: pid of the web server
 ├── web_port               # legacy mirror: port of the web server
 ├── web_command.json       # pending control command for the web player
-├── web_ui.json            # web UI settings (download format)
+├── web_ui.json            # web UI settings (download format, theme, custom/thumbnail colors)
 ├── downloads/             # downloaded audio (named by video id)
 │   ├── .cache/            #   thumbnails  <video_id>.jpg
 │   └── liked songs/       #   copies of liked songs
@@ -73,15 +73,24 @@ CREATE TABLE songs (
     last_played  REAL
 );
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE play_days (day TEXT PRIMARY KEY, plays INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE play_days (
+    day     TEXT PRIMARY KEY,
+    plays   INTEGER NOT NULL DEFAULT 0,
+    seconds INTEGER NOT NULL DEFAULT 0
+);
 ```
 
 `meta` holds migration flags only. `song` is the download path (`NULL`
 unless downloaded) and `speed_dial` marks web-UI favorites. `play_days` is
 one bucket per calendar day, bumped alongside `song_count` by
 `library.bump_play()`: `history.db` only timestamps streams, so this table
-is what lets `flow summary` chart *offline* plays per day. There is no
-backfill — buckets only exist from the first play after this shipped.
+is what lets `flow summary` chart *offline* plays per day and report hours
+played today / this week. `seconds` accumulates the duration of each play
+(`library.play_seconds()` reads it back); the column is added by
+`_ensure_schema` on first open, and there is no backfill — buckets only exist
+from the first play after this shipped. Days with plays but no recorded
+seconds are shown as an estimate (`~`) based on the library's average track
+length.
 
 **The API is still dict-shaped.** `library.load()` returns
 `{video_id: {...}}` and every write goes through `library._mutate(fn)`, so

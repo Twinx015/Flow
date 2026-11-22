@@ -17,6 +17,8 @@ a = Analysis(
     ],
     hiddenimports=[
         "vlc",
+        "PIL",
+        "PIL.Image",
         "psutil",
         "sounddevice",
         "ytmusicapi",

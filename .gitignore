@@ -8,3 +8,4 @@ build
 flow
 opencode*
 .pytest_cache
+setup.cfg

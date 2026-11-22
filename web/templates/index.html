@@ -4,7 +4,7 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Flow</title>
-        <link rel="icon" type="image/x-icon" href="/static/Logo.png">
+        <link rel="icon" type="image/x-icon" href="/static/Logo.png" />
         <link
             rel="stylesheet"
             href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
@@ -22,9 +22,6 @@
             <nav class="sidebar-nav">
                 <button class="nav-item active" data-panel="home">
                     <i class="bi bi-house"></i><span>Home</span>
-                </button>
-                <button class="nav-item" data-panel="explore">
-                    <i class="bi bi-compass"></i><span>Explore</span>
                 </button>
                 <button class="nav-item" data-panel="local">
                     <i class="bi bi-hdd"></i><span>Local</span>
@@ -107,23 +104,28 @@
                     </div>
                     <div id="speedDialGrid" class="card-grid"></div>
                 </div>
-            </div>
-
-            <div class="panel" id="panelExplore">
                 <div id="exploreSections"></div>
             </div>
 
             <div class="panel" id="panelSearch">
                 <div id="ytmFilters" class="ytm-filters">
-                    <button class="filt-chip active" data-filter="">
-                        All
-                    </button>
+                    <button class="filt-chip active" data-filter="">All</button>
                     <button class="filt-chip" data-filter="songs">Songs</button>
-                    <button class="filt-chip" data-filter="videos">Videos</button>
-                    <button class="filt-chip" data-filter="albums">Albums</button>
-                    <button class="filt-chip" data-filter="artists">Artists</button>
-                    <button class="filt-chip" data-filter="playlists">Playlists</button>
-                    <button class="filt-chip" data-filter="community">Community</button>
+                    <button class="filt-chip" data-filter="videos">
+                        Videos
+                    </button>
+                    <button class="filt-chip" data-filter="albums">
+                        Albums
+                    </button>
+                    <button class="filt-chip" data-filter="artists">
+                        Artists
+                    </button>
+                    <button class="filt-chip" data-filter="playlists">
+                        Playlists
+                    </button>
+                    <button class="filt-chip" data-filter="community">
+                        Community
+                    </button>
                 </div>
                 <div id="resultsContainer" class="song-list"></div>
             </div>
@@ -275,12 +277,22 @@
         </footer>
 
         <div id="fsPlayer" class="modal-overlay fs-player" tabindex="-1">
-            <button id="fsCloseBtn" class="icon-btn fs-close" title="Close (Esc)">
+            <div id="fsBg"></div>
+            <button
+                id="fsCloseBtn"
+                class="icon-btn fs-close"
+                title="Close (Esc)"
+            >
                 <i class="bi bi-x-lg"></i>
             </button>
             <div class="fs-grid">
                 <section class="fs-left">
-                    <img id="fsArt" class="fs-art" src="/static/Logo.png" alt="" />
+                    <img
+                        id="fsArt"
+                        class="fs-art"
+                        src="/static/Logo.png"
+                        alt=""
+                    />
                     <div class="fs-meta">
                         <span id="fsTag" class="browse-tag">Now Playing</span>
                         <h2 id="fsTitle" class="fs-title">Flow Music</h2>
@@ -294,35 +306,95 @@
                         <span id="fsTot" class="time-label">0:00</span>
                     </div>
                     <div class="fs-controls">
-                        <button id="fsShuffleBtn" class="ctrl-btn" title="Shuffle">
+                        <button
+                            id="fsShuffleBtn"
+                            class="ctrl-btn"
+                            title="Shuffle"
+                        >
                             <i class="bi bi-shuffle"></i>
                         </button>
-                        <button id="fsPrevBtn" class="ctrl-btn" title="Previous">
+                        <button
+                            id="fsPrevBtn"
+                            class="ctrl-btn"
+                            title="Previous"
+                        >
                             <i class="bi bi-skip-start-fill"></i>
                         </button>
-                        <button id="fsPlayBtn" class="ctrl-btn play-btn" title="Play/Pause">
+                        <button
+                            id="fsPlayBtn"
+                            class="ctrl-btn play-btn"
+                            title="Play/Pause"
+                        >
                             <i class="bi bi-play-fill"></i>
                         </button>
                         <button id="fsNextBtn" class="ctrl-btn" title="Next">
                             <i class="bi bi-skip-end-fill"></i>
                         </button>
-                        <button id="fsRepeatBtn" class="ctrl-btn" title="Repeat">
+                        <button
+                            id="fsRepeatBtn"
+                            class="ctrl-btn"
+                            title="Repeat"
+                        >
                             <i class="bi bi-repeat"></i>
                         </button>
                         <button id="fsLikeBtn" class="ctrl-btn" title="Like">
                             <i class="bi bi-heart"></i>
                         </button>
+                        <button
+                            id="fsDownloadBtn"
+                            class="ctrl-btn"
+                            title="Download"
+                        >
+                            <i class="bi bi-download"></i>
+                        </button>
                     </div>
                 </section>
                 <aside class="fs-right">
-                    <div class="fs-lyrics-head">
-                        <span class="browse-tag">LYRICS</span>
+                    <div class="fs-right-head">
+                        <div class="fs-tabs">
+                            <button class="fs-tab active" data-fs-tab="lyrics">
+                                Lyrics
+                            </button>
+                            <button class="fs-tab" data-fs-tab="queue">
+                                Queue
+                            </button>
+                        </div>
                         <span id="fsLyricsSource" class="lyrics-source"></span>
-                        <button id="fsReloadLyricsBtn" class="icon-btn" title="Reload">
+                        <button
+                            id="fsReloadLyricsBtn"
+                            class="icon-btn"
+                            title="Reload"
+                        >
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </div>
-                    <div id="fsLyricsBody" class="fs-lyrics-body"></div>
+                    <div id="fsLyricsMeta" class="fs-lyrics-meta">
+                        <input
+                            id="fsLyricsQuery"
+                            class="lyrics-input"
+                            type="text"
+                            spellcheck="false"
+                            autocomplete="off"
+                            placeholder="Song name for lyrics…"
+                        />
+                        <button
+                            id="fsLyricsSearchBtn"
+                            class="icon-btn"
+                            title="Search lyrics"
+                        >
+                            <i class="bi bi-search"></i>
+                        </button>
+                    </div>
+                    <div
+                        id="fsLyricsBody"
+                        class="fs-lyrics-body fs-tab-panel active"
+                        data-fs-panel="lyrics"
+                    ></div>
+                    <div
+                        id="fsQueueBody"
+                        class="fs-queue-body fs-tab-panel"
+                        data-fs-panel="queue"
+                    ></div>
                 </aside>
             </div>
         </div>
@@ -341,7 +413,35 @@
                         <select id="setTheme">
                             <option value="dark">Dark</option>
                             <option value="light">Light</option>
+                            <option value="breeze">Breeze</option>
+                            <option value="monochrome">Monochrome</option>
+                            <option value="gruvbox">Gruvbox</option>
+                            <option value="nord">Nord</option>
+                            <option value="dracula">Dracula</option>
+                            <option value="custom">Custom</option>
+                            <option value="thumbnail">Thumbnail Accent</option>
                         </select>
+                    </div>
+                    <div id="customThemeFields" class="theme-extra hidden">
+                        <div class="field">
+                            <label><i class="bi bi-droplet"></i> Background</label>
+                            <input type="color" id="setCustomBg" value="#0f0f0f" />
+                        </div>
+                        <div class="field">
+                            <label><i class="bi bi-brush"></i> Accent</label>
+                            <input type="color" id="setCustomAccent" value="#b370ff" />
+                        </div>
+                        <div class="field">
+                            <label><i class="bi bi-type"></i> Text</label>
+                            <input type="color" id="setCustomText" value="#ffffff" />
+                        </div>
+                    </div>
+                    <div id="thumbnailThemeFields" class="theme-extra hidden">
+                        <div class="field">
+                            <label><i class="bi bi-droplet"></i> Background</label>
+                            <input type="color" id="setDynamicBg" value="#0f0f0f" />
+                        </div>
+                        <p class="field-hint">Accent color is picked from the current thumbnail.</p>
                     </div>
                     <div class="field">
                         <label
@@ -432,7 +532,11 @@
                     <h2><i class="bi bi-text-paragraph"></i> Lyrics</h2>
                     <div class="lyrics-head-right">
                         <span id="lyricsSource" class="lyrics-source"></span>
-                        <button id="reloadLyricsBtn" class="icon-btn" title="Reload">
+                        <button
+                            id="reloadLyricsBtn"
+                            class="icon-btn"
+                            title="Reload"
+                        >
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                         <button id="closeLyrics" class="icon-btn">
@@ -441,10 +545,19 @@
                     </div>
                 </div>
                 <div class="lyrics-meta">
-                    <input id="lyricsQuery" class="lyrics-input" type="text"
-                           spellcheck="false" autocomplete="off"
-                           placeholder="Song name for lyrics…" />
-                    <button id="lyricsSearchBtn" class="icon-btn" title="Search lyrics">
+                    <input
+                        id="lyricsQuery"
+                        class="lyrics-input"
+                        type="text"
+                        spellcheck="false"
+                        autocomplete="off"
+                        placeholder="Song name for lyrics…"
+                    />
+                    <button
+                        id="lyricsSearchBtn"
+                        class="icon-btn"
+                        title="Search lyrics"
+                    >
                         <i class="bi bi-search"></i>
                     </button>
                     <span id="lyricsSourceMode" class="lyrics-tag"></span>

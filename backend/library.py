@@ -52,8 +52,9 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS play_days (
-    day   TEXT PRIMARY KEY,
-    plays INTEGER NOT NULL DEFAULT 0
+    day     TEXT PRIMARY KEY,
+    plays   INTEGER NOT NULL DEFAULT 0,
+    seconds INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS song_tags (
@@ -109,6 +110,11 @@ def _ensure_schema(conn):
         conn.execute("ALTER TABLE songs ADD COLUMN custom_title TEXT")
     if "language" not in cols:
         conn.execute("ALTER TABLE songs ADD COLUMN language TEXT")
+    day_cols = {row["name"] for row in conn.execute("PRAGMA table_info(play_days)")}
+    if "seconds" not in day_cols:
+        conn.execute(
+            "ALTER TABLE play_days ADD COLUMN seconds INTEGER NOT NULL DEFAULT 0"
+        )
     _migrate_from_json(conn)
     _purge_auto_tags(conn)
 
@@ -836,9 +842,10 @@ def bump_play(video_id: str, title: str = "", artist: str = "", duration=0) -> i
         entry["last_played"] = now
         conn.execute(_UPSERT, (video_id, *_to_values(_sanitize(entry))))
         conn.execute(
-            "INSERT INTO play_days (day, plays) VALUES (?, 1) "
-            "ON CONFLICT(day) DO UPDATE SET plays = plays + 1",
-            (datetime.date.today().isoformat(),),
+            "INSERT INTO play_days (day, plays, seconds) VALUES (?, 1, ?) "
+            "ON CONFLICT(day) DO UPDATE SET plays = plays + 1, "
+            "seconds = seconds + excluded.seconds",
+            (datetime.date.today().isoformat(), duration),
         )
         return entry["song_count"]
 
@@ -869,6 +876,23 @@ def play_days(days: int = 7) -> list:
         ).fetchall()
     for r in rows:
         counts[r["day"]] = int(r["plays"] or 0)
+    return [
+        (offset, counts.get((today - datetime.timedelta(days=offset)).isoformat(), 0))
+        for offset in range(days - 1, -1, -1)
+    ]
+
+
+def play_seconds(days: int = 7) -> list:
+    """`[(day_offset, seconds)]` per calendar day, both modes, oldest first."""
+    today = datetime.date.today()
+    counts: dict[str, int] = {}
+    with _session() as conn:
+        rows = conn.execute(
+            "SELECT day, seconds FROM play_days WHERE day >= ?",
+            ((today - datetime.timedelta(days=days - 1)).isoformat(),),
+        ).fetchall()
+    for r in rows:
+        counts[r["day"]] = int(r["seconds"] or 0)
     return [
         (offset, counts.get((today - datetime.timedelta(days=offset)).isoformat(), 0))
         for offset in range(days - 1, -1, -1)

@@ -121,15 +121,65 @@ def _sort_rows(rows: list[dict], sort: str) -> list[dict]:
 def _box(title: str, rows: list[tuple], width: int) -> None:
     """The full-width `┌─ Title ─┐` card `flow --status` also prints."""
     inner = width - 2
+    label_w = max((len(label) for label, _ in rows), default=0)
+    label_w = max(16, min(label_w + 2, 40))
     print(f"{P}┌─ {title} {'─' * max(0, inner - len(title) - 3)}┐{R}")
     for label, value in rows:
-        line = f"  {label:<16}{value}"
+        line = f"  {label:<{label_w}}{value}"
         plain = len(re.sub(r"\x1b\[[0-9;]*m", "", line))
         print(
             f"{P}│{R} {_truncate(line, inner - 1)}"
             f"{' ' * max(0, inner - 1 - plain)}{P}│{R}"
         )
     print(f"{P}└{'─' * inner}┘{R}\n")
+
+
+def _fmt_hours(seconds) -> str:
+    """`1h 04m` / `42m` for a duration in seconds."""
+    total = int(max(0, seconds or 0))
+    hours, rem = divmod(total, 3600)
+    mins = rem // 60
+    if hours:
+        return f"{hours}h {mins:02d}m"
+    return f"{mins}m"
+
+
+def _song_seconds(row: dict) -> int:
+    return int(row.get("song_count") or 0) * int(row.get("duration") or 0)
+
+
+def _top_songs(rows: list[dict], limit: int = 5) -> list[dict]:
+    """Songs ranked by hours played, then play count."""
+    return sorted(
+        rows,
+        key=lambda r: (_song_seconds(r), r["song_count"], r["last_played"]),
+        reverse=True,
+    )[:limit]
+
+
+def _hours(rows: list[dict], days: int = 7) -> tuple[int, bool, int, bool]:
+    """`(today, today_est, week, week_est)` seconds from the day buckets.
+
+    Days played before `play_days.seconds` existed have a count but no time;
+    those fall back to the library's average track length so the card is not
+    blank on the first day after upgrading.
+    """
+    counts = dict(library.play_days(days))
+    tracked = dict(library.play_seconds(days))
+    plays = sum(int(row["song_count"] or 0) for row in rows)
+    seconds = sum(_song_seconds(row) for row in rows)
+    avg = seconds / plays if plays else 0
+    per_day = {}
+    today_est = week_est = False
+    for offset in range(days):
+        day_plays = counts.get(offset, 0)
+        day_seconds = tracked.get(offset, 0)
+        if not day_seconds and day_plays:
+            day_seconds = int(round(day_plays * avg))
+            today_est = today_est or offset == 0
+            week_est = True
+        per_day[offset] = day_seconds
+    return per_day.get(0, 0), today_est, sum(per_day.values()), week_est
 
 
 def _top_tag(rows: list[dict], key: str) -> str:
@@ -176,13 +226,15 @@ def _week_sums() -> tuple[int, int]:
 
 
 def show_stats() -> None:
-    """The stats card: the online/offline split, the three tops, the 7-day bars."""
+    """The stats card: the online/offline split, hours, the tops, the 7-day bars."""
     lib = library.stats()
     online = history.totals()["online_plays"]
     rows = library.play_rows()
     width = _tty_width()
     combined = lib["total_plays"]
     offline = max(combined - online, 0)
+    today_seconds, today_est, week_seconds, week_est = _hours(rows)
+    total_seconds = sum(_song_seconds(row) for row in rows)
     print()
     _box(
         "Flow Summary",
@@ -192,6 +244,9 @@ def show_stats() -> None:
             ("offline plays", f"{G}{offline}{R} {M}(combined - online){R}"),
             ("unique songs", f"{G}{lib['unique_songs']}{R}"),
             ("played today", f"{G}{lib['played_today']}{R}"),
+            ("hours today", f"{G}{'~' if today_est else ''}{_fmt_hours(today_seconds)}{R}"),
+            ("hours this week", f"{G}{'~' if week_est else ''}{_fmt_hours(week_seconds)}{R}"),
+            ("hours all time", f"{G}{_fmt_hours(total_seconds)}{R}"),
         ],
         width,
     )
@@ -205,6 +260,17 @@ def show_stats() -> None:
         ],
         width,
     )
+    top_rows = []
+    for rank, row in enumerate(_top_songs(rows), 1):
+        plays = int(row["song_count"] or 0)
+        label = f"{rank}. {_truncate(row['title'], 32)}"
+        if int(row["duration"] or 0) > 0:
+            played = f"{G}{_fmt_hours(_song_seconds(row))}{R}"
+        else:
+            played = f"{M}unknown{R}"
+        noun = "play" if plays == 1 else "plays"
+        top_rows.append((label, f"{played} {M}· {plays} {noun}{R}"))
+    _box("Top songs", top_rows, width)
     week = _week_rows()
     bar_width = 24
     peak = max((on + off for _, on, off in week), default=0)
@@ -292,8 +358,9 @@ def cmd_summary(extra: list[str], args=None) -> None:
 
 def print_help() -> None:
     print(f"{T}summary{R} {M}[-l] [-s sort] [--top N] [-c]{R}")
-    print(f"{G}  Play statistics: the online/offline split, the top artist{R}")
-    print(f"{G}  and song, and the ranked per-song table.{R}")
+    print(f"{G}  Play statistics: the online/offline split, hours played{R}")
+    print(f"{G}  today / this week / all time, the top artist and song, the{R}")
+    print(f"{G}  five most-played songs by hours, and the ranked table.{R}")
     print(
         f"  {M}-l{R}          {G}List the per-song table instead of the stats card{R}"
     )
