@@ -412,27 +412,32 @@ def _detect_ffmpeg():
 
 
 def check_deps():
-    def _try_import(name):
+    def _probe(import_name):
         try:
-            __import__(name)
-            return True
+            __import__(import_name)
+            return True, "installed"
         except ImportError:
-            return False
+            return False, "not installed"
+        except Exception:
+            return False, "init failed"
 
-    deps = [
-        ("ffmpeg", shutil.which("ffmpeg") is not None),
-        ("vlc", _try_import("vlc")),
-        ("yt-dlp", _try_import("yt_dlp")),
-        ("psutil", _try_import("psutil")),
-        ("flask", _try_import("flask")),
-        ("numpy", _try_import("numpy")),
-        ("sounddevice", _try_import("sounddevice")),
-        ("ytmusicapi", _try_import("ytmusicapi")),
-    ]
+    ffmpeg_ok = shutil.which("ffmpeg") is not None
+    deps = [("ffmpeg", ffmpeg_ok, "installed" if ffmpeg_ok else "not installed")]
+    for label, mod in [
+        ("vlc", "vlc"),
+        ("yt-dlp", "yt_dlp"),
+        ("psutil", "psutil"),
+        ("flask", "flask"),
+        ("numpy", "numpy"),
+        ("sounddevice", "sounddevice"),
+        ("ytmusicapi", "ytmusicapi"),
+    ]:
+        ok, status = _probe(mod)
+        deps.append((label, ok, status))
+
     print(f"  | {'dep':10s} | {'status':13s} | {'test':6s} |")
     print(f"  | {'─' * 10} | {'─' * 13} | {'─' * 6} |")
-    for name, ok in deps:
-        status = "installed" if ok else "not installed"
+    for name, ok, status in deps:
         test = "passed" if ok else "failed"
         print(f"  | {name:10s} | {status:13s} | {test:6s} |")
 
